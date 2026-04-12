@@ -124,37 +124,37 @@ nav_items = [
         "title": "Message Persuasion Testing",
         "icon": "⚡",
         "description": "MrP Reach × Universality scatter. Golden Zone issues, quadrant analysis, cross-state transfer ratings.",
-        "page": "1_Survey_Results",
+        "page": "pages/1_Survey_Results.py",
     },
     {
         "title": "VIP Scores",
         "icon": "🎯",
         "description": "Disposition scoring, construct-level favorability, Q1–Q5 quintile breakdowns, persuasion tier assignments.",
-        "page": "2_VIP_Scores",
+        "page": "pages/2_VIP_Scores.py",
     },
     {
         "title": "Persuasion Architecture",
         "icon": "🧩",
         "description": "Entry → Bridge → Downstream tiers, voter archetypes, persuasion pathways, cross-state construct stability.",
-        "page": "3_MrP_Estimates",
+        "page": "pages/3_MrP_Estimates.py",
     },
     {
         "title": "Cross-State",
         "icon": "🗺️",
         "description": "State comparison cards, Golden Zone counts, top issues, transfer analysis across all active states.",
-        "page": "4_Media_Portal",
+        "page": "pages/4_Media_Portal.py",
     },
     {
         "title": "MediaMaker",
         "icon": "📢",
         "description": "Golden Zone issue → audience targeting specs + AI-generated message scripts. Channel recommendations.",
-        "page": "5_Survey_Writer",
+        "page": "pages/5_Survey_Writer.py",
     },
     {
         "title": "SurveyMaker",
         "icon": "✏️",
         "description": "Question bank, AI rewriter with Actionable Intel methodology, survey assembly and export.",
-        "page": "6_AI_Search",
+        "page": "pages/6_AI_Search.py",
     },
 ]
 
@@ -162,14 +162,13 @@ cols = st.columns(3)
 for idx, item in enumerate(nav_items):
     with cols[idx % 3]:
         st.markdown(f"""
-        <a href="/{item['page']}" style="text-decoration: none;">
-            <div class="nav-card">
-                <div class="nav-card-icon">{item['icon']}</div>
-                <div class="nav-card-title">{item['title']}</div>
-                <div class="nav-card-desc">{item['description']}</div>
-            </div>
-        </a>
+        <div class="nav-card">
+            <div class="nav-card-icon">{item['icon']}</div>
+            <div class="nav-card-title">{item['title']}</div>
+            <div class="nav-card-desc">{item['description']}</div>
+        </div>
         """, unsafe_allow_html=True)
+        st.page_link(item["page"], label=f"Open {item['title']}", icon="➡️")
 
 st.divider()
 
