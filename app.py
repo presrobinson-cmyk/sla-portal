@@ -171,27 +171,27 @@ st.markdown("### Quick Access")
 
 nav_items = [
     {
-        "title": "Message Persuasion Testing",
+        "title": "Issue Landscape",
         "icon": "⚡",
-        "description": "MrP Reach × Universality scatter. Golden Zone issues, quadrant analysis, cross-state transfer ratings.",
+        "description": "See which issues have the broadest public support and strongest cross-party appeal. Find Golden Zone winners.",
         "page": "pages/1_Survey_Results.py",
     },
     {
-        "title": "VIP Scores",
+        "title": "Voter Segments",
         "icon": "🎯",
-        "description": "Disposition scoring, construct-level favorability, Q1–Q5 quintile breakdowns, persuasion tier assignments.",
+        "description": "How different voter groups respond to each issue. Party, age, race, and education breakdowns.",
         "page": "pages/2_VIP_Scores.py",
     },
     {
-        "title": "Persuasion Architecture",
+        "title": "Persuasion Pathways",
         "icon": "🧩",
-        "description": "Entry → Bridge → Downstream tiers, voter archetypes, persuasion pathways, cross-state construct stability.",
+        "description": "Which issues open the door to persuasion, which build coalitions, and which close the deal.",
         "page": "pages/3_MrP_Estimates.py",
     },
     {
         "title": "Cross-State",
         "icon": "🗺️",
-        "description": "State comparison cards, Golden Zone counts, top issues, transfer analysis across all active states.",
+        "description": "Compare support levels across states. See which messages transfer and which need local adaptation.",
         "page": "pages/4_Media_Portal.py",
     },
     {
@@ -247,10 +247,10 @@ with col1:
 with col2:
     st.markdown("**Portal Modules**")
     modules = [
-        ("Message Persuasion Testing", "MrP Reach × Universality, quadrant classification", "Live"),
-        ("VIP Scores", "Disposition scoring, construct favorability, tier assignments", "Live"),
-        ("Persuasion Architecture", "Entry → Bridge → Downstream tiers, voter archetypes", "Live"),
-        ("Cross-State", "Transfer analysis, state comparison", "Live"),
+        ("Issue Landscape", "Overall support vs. cross-party appeal for every question", "Live"),
+        ("Voter Segments", "How different voter groups respond — by party, age, race", "Live"),
+        ("Persuasion Pathways", "Which issues open doors, build coalitions, close deals", "Live"),
+        ("Cross-State", "Support comparison across states, message transferability", "Live"),
         ("MediaMaker", "AI-generated scripts, channel targeting", "Coming Soon"),
         ("SurveyMaker", "Question bank, AI rewriter, survey export", "Coming Soon"),
     ]
