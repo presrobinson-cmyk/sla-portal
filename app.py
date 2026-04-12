@@ -162,13 +162,16 @@ cols = st.columns(3)
 for idx, item in enumerate(nav_items):
     with cols[idx % 3]:
         st.markdown(f"""
-        <div class="nav-card">
-            <div class="nav-card-icon">{item['icon']}</div>
-            <div class="nav-card-title">{item['title']}</div>
-            <div class="nav-card-desc">{item['description']}</div>
+        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;
+             padding:1.25rem;margin-bottom:0.5rem;min-height:140px;
+             box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+            <div style="font-size:1.8rem;margin-bottom:0.5rem;">{item['icon']}</div>
+            <div style="font-weight:700;color:{NAVY};font-size:1rem;margin-bottom:0.4rem;">{item['title']}</div>
+            <div style="font-size:0.82rem;color:{TEXT3};line-height:1.45;">{item['description']}</div>
         </div>
         """, unsafe_allow_html=True)
-        st.page_link(item["page"], label=f"Open {item['title']}", icon="➡️")
+        if st.button(f"Open {item['title']}", key=f"nav_{idx}", use_container_width=True):
+            st.switch_page(item["page"])
 
 st.divider()
 
