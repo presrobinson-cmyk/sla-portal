@@ -14,9 +14,9 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 from auth import require_auth
 from theme import (
-    apply_theme, portal_header, portal_footer, state_pills_html,
+    apply_theme, portal_header, portal_footer,
     get_supabase_config, get_supabase_headers, CJ_SURVEYS, SURVEY_STATE,
-    STATE_COLORS, STATE_ABBR, NAVY, GOLD, GOLD_MID, TEXT3, BORDER2,
+    STATE_COLORS, STATE_ABBR, NAVY, GOLD, GOLD_MID, TEXT3, BORDER2, CARD_BG,
 )
 
 st.set_page_config(
@@ -94,13 +94,6 @@ portal_header(
     n_questions=stats["n_scored"],
 )
 
-# ── State pills ──
-st.markdown(
-    state_pills_html(stats["states_live"], stats["states_pending"]),
-    unsafe_allow_html=True,
-)
-st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
-
 # ── Quick stats row ──
 cols = st.columns(4)
 with cols[0]:
@@ -110,9 +103,66 @@ with cols[1]:
 with cols[2]:
     st.metric("Scored Responses", f"{stats['n_scored']:,}")
 with cols[3]:
-    # Show pending if any
     pending = len(stats["states_pending"])
     st.metric("States Pending", str(pending) if pending > 0 else "0")
+
+# ── US Map ──
+import plotly.graph_objects as go
+
+ABBR_TO_STATE = {v: k for k, v in STATE_ABBR.items()}
+active_abbrs = [STATE_ABBR[s] for s in stats["states_live"] if s in STATE_ABBR]
+
+ALL_US_STATES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",
+    "HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
+    "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+    "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
+    "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+]
+
+z_vals = []
+hover_texts = []
+for abbr in ALL_US_STATES:
+    if abbr in active_abbrs:
+        full = ABBR_TO_STATE.get(abbr, abbr)
+        n = stats["state_counts"].get(full, 0)
+        z_vals.append(1)
+        hover_texts.append(f"<b>{full}</b><br>{n:,} respondents<br><i>Click below to view report</i>")
+    else:
+        z_vals.append(0)
+        hover_texts.append(f"{abbr}")
+
+fig_map = go.Figure(data=go.Choropleth(
+    locations=ALL_US_STATES,
+    z=z_vals,
+    locationmode="USA-states",
+    colorscale=[[0, "#E8E4DC"], [0.49, "#E8E4DC"], [0.51, GOLD], [1, GOLD]],
+    showscale=False,
+    hovertext=hover_texts,
+    hoverinfo="text",
+    marker_line_color="white",
+    marker_line_width=1.5,
+))
+fig_map.update_layout(
+    geo=dict(scope="usa", bgcolor="rgba(0,0,0,0)", lakecolor="rgba(0,0,0,0)",
+             landcolor="#F5F3EF", showlakes=False),
+    margin=dict(l=0, r=0, t=0, b=0),
+    height=380,
+    paper_bgcolor="rgba(0,0,0,0)",
+    plot_bgcolor="rgba(0,0,0,0)",
+)
+st.plotly_chart(fig_map, use_container_width=True, key="us_map")
+
+# State navigation buttons
+st.markdown(f"<div style='text-align:center;margin-bottom:0.5rem;font-size:0.85rem;color:{TEXT3};'>Select a state to view its report:</div>", unsafe_allow_html=True)
+state_cols = st.columns(len(active_abbrs) if active_abbrs else 1)
+for i, abbr in enumerate(sorted(active_abbrs)):
+    full = ABBR_TO_STATE.get(abbr, abbr)
+    color = STATE_COLORS.get(full, NAVY)
+    with state_cols[i]:
+        if st.button(f"{abbr}  —  {full}", key=f"state_{abbr}", use_container_width=True):
+            st.session_state["selected_state"] = abbr
+            st.switch_page("pages/8_State_Report.py")
 
 st.divider()
 
