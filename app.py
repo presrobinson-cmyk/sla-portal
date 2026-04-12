@@ -142,27 +142,37 @@ fig_map = go.Figure(data=go.Choropleth(
     hoverinfo="text",
     marker_line_color="white",
     marker_line_width=1.5,
+    selectedpoints=[],
 ))
 fig_map.update_layout(
     geo=dict(scope="usa", bgcolor="rgba(0,0,0,0)", lakecolor="rgba(0,0,0,0)",
              landcolor="#F5F3EF", showlakes=False),
     margin=dict(l=0, r=0, t=0, b=0),
-    height=380,
+    height=420,
     paper_bgcolor="rgba(0,0,0,0)",
     plot_bgcolor="rgba(0,0,0,0)",
+    dragmode=False,
 )
-st.plotly_chart(fig_map, use_container_width=True, key="us_map")
 
-# State navigation buttons
-st.markdown(f"<div style='text-align:center;margin-bottom:0.5rem;font-size:0.85rem;color:{TEXT3};'>Select a state to view its report:</div>", unsafe_allow_html=True)
-state_cols = st.columns(len(active_abbrs) if active_abbrs else 1)
-for i, abbr in enumerate(sorted(active_abbrs)):
-    full = ABBR_TO_STATE.get(abbr, abbr)
-    color = STATE_COLORS.get(full, NAVY)
-    with state_cols[i]:
-        if st.button(f"{abbr}  —  {full}", key=f"state_{abbr}", use_container_width=True):
-            st.session_state["selected_state"] = abbr
+# Render map with click detection
+map_event = st.plotly_chart(
+    fig_map, use_container_width=True, key="us_map",
+    on_select="rerun", selection_mode=["points"],
+)
+
+# Handle map click → navigate to state report
+if map_event and map_event.selection and map_event.selection.points:
+    clicked_pt = map_event.selection.points[0]
+    clicked_idx = clicked_pt.get("point_index", -1)
+    if 0 <= clicked_idx < len(ALL_US_STATES):
+        clicked_abbr = ALL_US_STATES[clicked_idx]
+        if clicked_abbr in active_abbrs:
+            st.session_state["selected_state"] = clicked_abbr
             st.switch_page("pages/8_State_Report.py")
+        else:
+            st.toast(f"{clicked_abbr} — no survey data yet")
+
+st.markdown(f"<div style='text-align:center;font-size:0.8rem;color:{TEXT3};margin-top:-0.5rem;'>Click any highlighted state to view its report</div>", unsafe_allow_html=True)
 
 st.divider()
 
@@ -174,37 +184,37 @@ nav_items = [
         "title": "Issue Landscape",
         "icon": "⚡",
         "description": "See which issues have the broadest public support and strongest cross-party appeal. Find Golden Zone winners.",
-        "page": "pages/1_Survey_Results.py",
+        "page": "pages/1_Issue_Landscape.py",
     },
     {
         "title": "Voter Segments",
         "icon": "🎯",
         "description": "How different voter groups respond to each issue. Party, age, race, and education breakdowns.",
-        "page": "pages/2_VIP_Scores.py",
+        "page": "pages/2_Voter_Segments.py",
     },
     {
         "title": "Persuasion Pathways",
         "icon": "🧩",
         "description": "Which issues open the door to persuasion, which build coalitions, and which close the deal.",
-        "page": "pages/3_MrP_Estimates.py",
+        "page": "pages/3_Persuasion_Pathways.py",
     },
     {
         "title": "Cross-State",
         "icon": "🗺️",
         "description": "Compare support levels across states. See which messages transfer and which need local adaptation.",
-        "page": "pages/4_Media_Portal.py",
+        "page": "pages/4_Cross_State.py",
     },
     {
         "title": "MediaMaker",
         "icon": "📢",
         "description": "Golden Zone issue → audience targeting specs + AI-generated message scripts. Channel recommendations.",
-        "page": "pages/5_Survey_Writer.py",
+        "page": "pages/5_MediaMaker.py",
     },
     {
         "title": "SurveyMaker",
         "icon": "✏️",
         "description": "Question bank, AI rewriter with Actionable Intel methodology, survey assembly and export.",
-        "page": "pages/6_AI_Search.py",
+        "page": "pages/6_SurveyMaker.py",
     },
 ]
 
