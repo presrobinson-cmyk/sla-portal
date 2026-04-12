@@ -217,13 +217,13 @@ def load_universality():
         if st["r_n"] >= 10 and st["d_n"] >= 10:
             r_rate = st["r_f"] / st["r_n"] * 100
             d_rate = st["d_f"] / st["d_n"] * 100
-            gap = abs(r_rate - d_rate)
-            univ = max(0, 100 - gap)
         else:
-            univ = None
+            r_rate = None
+            d_rate = None
 
         result[qid] = {
-            "universality": univ,
+            "skeptic_reach": r_rate,       # support among reform skeptics (Republican proxy)
+            "supporter_reach": d_rate,     # support among reform supporters (Democrat proxy)
             "construct": st["construct"],
             "text": st["text"],
             "n": st["all_n"],
@@ -266,8 +266,8 @@ def load_state_reach_mrp():
 
 st.title("⚡ Issue Landscape")
 st.caption(
-    "Each dot is a survey question. Horizontal = overall public support. "
-    "Vertical = how well support holds across party lines. Best issues land upper-right (Golden Zone)."
+    "Each dot is a survey question. Horizontal = support among reform skeptics. "
+    "Vertical = overall public support. Best issues land upper-right (Golden Zone)."
 )
 
 if not SCORING_AVAILABLE:
@@ -291,7 +291,7 @@ for qid in all_qids:
     if reach is None:
         continue
 
-    universality = udata.get("universality")
+    skeptic_reach = udata.get("skeptic_reach")
     construct = udata.get("construct", "")
     if not construct:
         continue
@@ -302,13 +302,13 @@ for qid in all_qids:
     text = udata.get("text", "")
     has_mrp = qid in mrp_reach
 
-    # Quadrant
-    if universality is not None:
-        if reach >= 50 and universality >= 50:
+    # Quadrant: Y = overall support (reach), X = skeptic reach
+    if skeptic_reach is not None:
+        if reach >= 60 and skeptic_reach >= 60:
             quad = "Golden Zone"
-        elif reach >= 50 and universality < 50:
+        elif reach >= 60 and skeptic_reach < 60:
             quad = "Base Hardening"
-        elif reach < 50 and universality >= 50:
+        elif reach < 60 and skeptic_reach >= 60:
             quad = "Coalition Building"
         else:
             quad = "Ineffective"
@@ -320,7 +320,7 @@ for qid in all_qids:
         "construct": construct,
         "tier": tier,
         "reach": reach,
-        "universality": universality,
+        "skeptic_reach": skeptic_reach,
         "quadrant": quad,
         "n": n,
         "n_surveys": n_surveys,
@@ -333,7 +333,7 @@ if not items:
     st.stop()
 
 df = pd.DataFrame(items)
-df_plot = df.dropna(subset=["universality"])
+df_plot = df.dropna(subset=["skeptic_reach"])
 
 # ── Sidebar filters ──
 with st.sidebar:
@@ -380,14 +380,24 @@ if view_mode == "Scatter":
     filtered = filtered.copy()
     filtered["topic"] = filtered["construct"].map(CONSTRUCT_LABELS).fillna(filtered["construct"])
 
+    # Dynamic axis range — zoom into the data, don't waste space on empty 0-50 zones
+    x_min = max(0, filtered["skeptic_reach"].min() - 10)
+    x_max = min(100, filtered["skeptic_reach"].max() + 5)
+    y_min = max(0, filtered["reach"].min() - 10)
+    y_max = min(100, filtered["reach"].max() + 5)
+
+    # Quadrant threshold lines at 60% (where the quadrant split happens)
+    quad_x = 60
+    quad_y = 60
+
     fig = px.scatter(
-        filtered, x="reach", y="universality",
+        filtered, x="skeptic_reach", y="reach",
         color="quadrant",
         color_discrete_map=QUAD_COLORS,
         hover_name="topic",
         hover_data={
             "reach": ":.0f",
-            "universality": ":.0f",
+            "skeptic_reach": ":.0f",
             "n": ":,",
             "quadrant": True,
             "construct": False,
@@ -399,26 +409,36 @@ if view_mode == "Scatter":
             "topic": False,
         },
         size="n",
-        size_max=18,
+        size_max=14,
+        opacity=0.75,
         labels={
+            "skeptic_reach": "Skeptic Support %",
             "reach": "Overall Support %",
-            "universality": "Cross-Party Appeal",
             "n": "Respondents",
             "quadrant": "Category",
         },
     )
 
-    fig.add_hline(y=50, line_dash="dash", line_color="#D4D0C8", line_width=1)
-    fig.add_vline(x=50, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    # Quadrant dividers
+    if quad_y >= y_min and quad_y <= y_max:
+        fig.add_hline(y=quad_y, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    if quad_x >= x_min and quad_x <= x_max:
+        fig.add_vline(x=quad_x, line_dash="dash", line_color="#D4D0C8", line_width=1)
 
-    fig.add_annotation(x=25, y=97, text="Coalition Building", showarrow=False,
-                       font=dict(color="#B85400", size=11), opacity=0.7)
-    fig.add_annotation(x=75, y=97, text="Golden Zone", showarrow=False,
-                       font=dict(color="#1B6B3A", size=13, family="Playfair Display"), opacity=0.9)
-    fig.add_annotation(x=25, y=3, text="Ineffective", showarrow=False,
-                       font=dict(color="#8B1A1A", size=11), opacity=0.7)
-    fig.add_annotation(x=75, y=3, text="Base Hardening", showarrow=False,
-                       font=dict(color="#1155AA", size=11), opacity=0.7)
+    # Quadrant labels — position relative to the visible range
+    label_left_x = max(x_min + 2, (x_min + quad_x) / 2)
+    label_right_x = min(x_max - 2, (quad_x + x_max) / 2)
+    label_top_y = min(y_max - 1, y_max - 2)
+    label_bot_y = max(y_min + 1, y_min + 2)
+
+    fig.add_annotation(x=label_left_x, y=label_top_y, text="Base Hardening", showarrow=False,
+                       font=dict(color="#1155AA", size=11), opacity=0.6)
+    fig.add_annotation(x=label_right_x, y=label_top_y, text="Golden Zone", showarrow=False,
+                       font=dict(color="#1B6B3A", size=13, family="Playfair Display"), opacity=0.85)
+    fig.add_annotation(x=label_left_x, y=label_bot_y, text="Ineffective", showarrow=False,
+                       font=dict(color="#8B1A1A", size=11), opacity=0.6)
+    fig.add_annotation(x=label_right_x, y=label_bot_y, text="Coalition Building", showarrow=False,
+                       font=dict(color="#B85400", size=11), opacity=0.6)
 
     fig.update_layout(
         template="plotly_white",
@@ -426,9 +446,9 @@ if view_mode == "Scatter":
         plot_bgcolor=CARD_BG,
         height=600,
         margin=dict(l=60, r=20, t=40, b=60),
-        xaxis=dict(range=[0, 100], dtick=10, gridcolor="#E8E4DC",
+        xaxis=dict(range=[x_min, x_max], dtick=10, gridcolor="#E8E4DC",
                    title_font=dict(color=NAVY)),
-        yaxis=dict(range=[0, 100], dtick=10, gridcolor="#E8E4DC",
+        yaxis=dict(range=[y_min, y_max], dtick=10, gridcolor="#E8E4DC",
                    title_font=dict(color=NAVY)),
         legend=dict(
             font=dict(size=10, color=NAVY),
@@ -473,7 +493,7 @@ if view_mode == "Scatter":
         st.divider()
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Overall Support", f"{row['reach']:.0f}%")
-        c2.metric("Cross-Party Appeal", f"{row['universality']:.0f}")
+        c2.metric("Skeptic Support", f"{row['skeptic_reach']:.0f}%")
         c3.metric("Category", row["quadrant"])
         c4.metric("Respondents", f"{row['n']:,}")
 
@@ -492,12 +512,12 @@ elif view_mode == "Ranked List":
     st.markdown("#### Ranked by Overall Support (strongest first)")
     ranked = filtered.sort_values("reach", ascending=False)
 
-    display_df = ranked[["construct", "reach", "universality", "quadrant", "n"]].copy()
+    display_df = ranked[["construct", "reach", "skeptic_reach", "quadrant", "n"]].copy()
     display_df["Topic"] = display_df["construct"].map(CONSTRUCT_LABELS).fillna(display_df["construct"])
-    display_df = display_df[["Topic", "reach", "universality", "quadrant", "n"]]
-    display_df.columns = ["Topic", "Overall Support %", "Cross-Party Appeal", "Category", "Respondents"]
+    display_df = display_df[["Topic", "reach", "skeptic_reach", "quadrant", "n"]]
+    display_df.columns = ["Topic", "Overall Support %", "Skeptic Support %", "Category", "Respondents"]
     display_df["Overall Support %"] = display_df["Overall Support %"].apply(lambda x: f"{x:.0f}%")
-    display_df["Cross-Party Appeal"] = display_df["Cross-Party Appeal"].apply(lambda x: f"{x:.0f}" if pd.notna(x) else "—")
+    display_df["Skeptic Support %"] = display_df["Skeptic Support %"].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
     display_df = display_df.reset_index(drop=True)
     display_df.index = display_df.index + 1
 
