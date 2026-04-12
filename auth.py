@@ -29,7 +29,7 @@ def get_user_store() -> dict:
         # Fallback demo accounts if secrets not configured
         return {
             "admin": hash_password("actionable2026"),
-            "preston": hash_password("intel2026"),
+            "preston": "22b30fdf16b5772fbf941f4d04b9f589388bf1847135f8267b4fe68a9c7c65d8",
         }
 
 
