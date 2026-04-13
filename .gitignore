@@ -1,6 +1,9 @@
 # Streamlit secrets (never commit these!)
 .streamlit/secrets.toml
 
+# Old deployment folder — do NOT include in repo
+_deploy_to_github/
+
 # Python cache files
 __pycache__/
 *.pyc
@@ -26,5 +29,4 @@ Thumbs.db
 *~
 
 # Streamlit cache
-.streamlit/config.toml
 .streamlit/logger.log

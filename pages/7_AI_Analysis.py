@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import apply_theme, portal_footer, NAVY, GOLD, CARD_BG, BORDER2, TEXT3
 from auth import require_auth
+from chat_widget import render_chat
 
 st.set_page_config(
     page_title="AI Analysis — SLA Portal",
@@ -123,5 +124,7 @@ st.info(
     "🔌 **Status:** AI Analysis requires API key configuration with Claude and will be available in the next portal update.",
     icon="ℹ️"
 )
+
+render_chat("ai_analysis")
 
 portal_footer()

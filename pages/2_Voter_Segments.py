@@ -18,6 +18,7 @@ from collections import defaultdict
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from auth import require_auth
+from chat_widget import render_chat
 
 # ── Theme ──
 from theme import (
@@ -63,6 +64,61 @@ SEGMENT_COLORS = {
 # Bridge colors
 BRIDGE_AGREE_COLOR = "#1B6B3A"  # green
 BRIDGE_DISAGREE_COLOR = "#8B1A1A"  # red
+
+# Human-readable construct names
+CONSTRUCT_LABELS = {
+    "PD_FUNDING": "Public Defender Funding",
+    "INVEST": "Community Investment",
+    "LIT": "Literacy Programs",
+    "COUNSEL_ACCESS": "Right to Counsel",
+    "DV": "Domestic Violence",
+    "CAND-DV": "Candidates on DV",
+    "PROP": "Property Crime Reform",
+    "REDEMPTION": "Redemption / Second Chances",
+    "EXPUNGE": "Record Expungement",
+    "SENTREVIEW": "Sentence Review",
+    "JUDICIAL": "Judicial Discretion",
+    "RETRO": "Retroactive Relief",
+    "FINES": "Fines & Fees",
+    "MAND": "Mandatory Minimums",
+    "BAIL": "Bail Reform",
+    "REENTRY": "Reentry Programs",
+    "RECORD": "Criminal Record Reform",
+    "JUV": "Juvenile Justice",
+    "FAMILY": "Family Reunification",
+    "ELDERLY": "Compassionate Release",
+    "COURT": "Court Reform",
+    "COURTREVIEW": "Court Review Process",
+    "TRUST": "System Trust",
+    "PLEA": "Plea Bargaining Reform",
+    "PROS": "Prosecutor Accountability",
+    "CAND": "Candidate Favorability",
+    "TOUGHCRIME": "Tough on Crime Attitudes",
+    "ISSUE_SALIENCE": "Issue Importance",
+    "IMPACT": "Personal Impact",
+    "DETER": "Deterrence Beliefs",
+    "FISCAL": "Fiscal Responsibility",
+    "DP_ABOLITION": "Death Penalty Abolition",
+    "DP_RELIABILITY": "Death Penalty Reliability",
+    "LWOP": "Life Without Parole",
+    "COMPASSION": "Compassionate Release",
+    "CLEMENCY": "Clemency",
+    "MENTAL_ADDICTION": "Mental Health & Addiction",
+    "RACIAL_DISPARITIES": "Racial Disparities",
+    "GOODTIME": "Good Time Credits",
+    "REVIEW": "Case Review",
+    "CONDITIONS": "Prison Conditions",
+    "AGING": "Aging in Prison",
+    "PAROLE": "Parole Reform",
+    "REVISIT": "Sentence Revisiting",
+    "MAND-DEPART": "Mandatory Departure",
+    "EARLYRELEASE": "Early Release",
+    "JURY": "Jury Reform",
+    "DRUGPOSS": "Drug Possession",
+    "ECON_DISPARITIES": "Economic Disparities",
+    "ALPR": "License Plate Surveillance",
+    "REFORM_LEGITIMACY": "Reform Legitimacy",
+}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -304,7 +360,7 @@ def compute_bridge_for_item(scored, segments, qid, min_overlap=15):
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🎯 Message Testing")
-st.caption("Each dot is a survey item. X = anti-reform support. Y = overall support. Click a dot for full detail.")
+st.caption("Each dot is a survey item. X = skeptic support. Y = overall support. Click a dot for full detail.")
 
 if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
@@ -324,8 +380,12 @@ with st.sidebar:
 
     # Construct filter
     all_constructs = sorted(set(s["construct"] for s in scored if s["rid"] in segments))
-    construct_options = ["All Constructs"] + all_constructs
-    construct_filter = st.selectbox("Construct", construct_options)
+    construct_display = {c: CONSTRUCT_LABELS.get(c, c) for c in all_constructs}
+    construct_options = ["All Topics"] + [construct_display[c] for c in all_constructs]
+    construct_filter_display = st.selectbox("Topic", construct_options)
+    # Map back to code
+    _display_to_code = {v: k for k, v in construct_display.items()}
+    construct_filter = _display_to_code.get(construct_filter_display, construct_filter_display)
 
     # Demo filter
     demo_cats = {
@@ -344,20 +404,20 @@ with st.sidebar:
                 demo_filter = f"{cat_key}::{demo_val}"
 
     # Y-axis toggle
-    y_mode = st.radio("Y Axis", ["Overall Support", "Q5 (Pro-Reform) Support"], index=0)
+    y_mode = st.radio("Y Axis", ["Overall Support", "Champion Support"], index=0)
 
     st.divider()
     st.metric("Respondents", f"{n_resp:,}")
     seg_counts = defaultdict(int)
     for s in segments.values():
         seg_counts[s] += 1
-    st.caption(f"Q1 (anti): {seg_counts[1]:,} | Q5 (pro): {seg_counts[5]:,}")
+    st.caption(f"Skeptics: {seg_counts[1]:,} | Champions: {seg_counts[5]:,}")
 
 # ── Compute items ──
 items = compute_item_stats(scored, segments, qid_text, state_filter,
                            demo_filter if demo_filter != "All" else None, demo_lookup)
 
-if construct_filter != "All Constructs":
+if construct_filter != "All Topics":
     items = [i for i in items if i["construct"] == construct_filter]
 
 if not items:
@@ -370,6 +430,8 @@ df["q1_pct"] = df["q1_rate"].apply(lambda x: x * 100 if x is not None else None)
 df["y_pct"] = df.apply(
     lambda r: (r["overall_rate"] * 100) if y_mode == "Overall Support"
     else (r["q5_rate"] * 100 if r["q5_rate"] is not None else None), axis=1)
+# Map y_pct label for scatter
+_y_label = "Overall Support %" if y_mode == "Overall Support" else "Champion Support %"
 df = df.dropna(subset=["q1_pct", "y_pct"])
 
 if df.empty:
@@ -378,14 +440,16 @@ if df.empty:
 
 # Tier info
 df["tier"] = df["construct"].apply(lambda c: TIER_MAP.get(c, ""))
+df["topic"] = df["construct"].apply(lambda c: CONSTRUCT_LABELS.get(c, c))
 
-# Color by construct
+# Color by topic (readable names)
 fig = px.scatter(
     df, x="q1_pct", y="y_pct",
-    color="construct",
+    color="topic",
     hover_name="qid",
     hover_data={
-        "construct": True,
+        "topic": True,
+        "construct": False,
         "q1_pct": ":.0f",
         "y_pct": ":.0f",
         "n": ":,",
@@ -399,8 +463,8 @@ fig = px.scatter(
     size="n",
     size_max=18,
     labels={
-        "q1_pct": "Q1 (Anti-Reform) Support %",
-        "y_pct": "Overall Support %" if y_mode == "Overall Support" else "Q5 (Pro-Reform) Support %",
+        "q1_pct": "Skeptic Support %",
+        "y_pct": "Overall Support %" if y_mode == "Overall Support" else "Champion Support %",
     },
 )
 
@@ -445,11 +509,10 @@ if selected_points and selected_points.selection and selected_points.selection.p
     idx = pt.get("point_index")
     curve = pt.get("curve_number", 0)
     # Map back to QID from the dataframe
-    construct_name = df["construct"].unique()
-    # Plotly groups by color (construct), so we need to find the right row
-    traces = sorted(df["construct"].unique())
+    # Plotly groups by color (topic), so we need to find the right row
+    traces = sorted(df["topic"].unique())
     if curve < len(traces):
-        sub = df[df["construct"] == traces[curve]]
+        sub = df[df["topic"] == traces[curve]]
         if idx is not None and idx < len(sub):
             selected_qid = sub.iloc[idx]["qid"]
 
@@ -480,11 +543,11 @@ if selected_qid:
         if tier_label:
             st.markdown(
                 f'{tier_badge_html(construct)} &nbsp; '
-                f'<span style="color: {TEXT3};">Construct: <strong>{construct}</strong></span>',
+                f'<span style="color: {TEXT3};">Topic: <strong>{CONSTRUCT_LABELS.get(construct, construct)}</strong></span>',
                 unsafe_allow_html=True)
     with col_h2:
         if item_row is not None:
-            st.metric("Q1 Support", f"{item_row['q1_pct']:.0f}%")
+            st.metric("Skeptic Support", f"{item_row['q1_pct']:.0f}%")
 
     # Question text
     st.markdown(f'<div class="detail-card"><strong>Question:</strong><br>{question_text}</div>',
@@ -496,7 +559,7 @@ if selected_qid:
     with col1:
         st.markdown("#### Segment Breakdown")
         seg_data = compute_segment_breakdown(scored, segments, selected_qid)
-        seg_labels = ["Q1 (Anti)", "Q2", "Q3 (Middle)", "Q4", "Q5 (Pro)"]
+        seg_labels = ["Skeptics", "Lean Skeptic", "Middle", "Lean Reform", "Champions"]
         seg_color_list = [SEGMENT_COLORS[i] for i in range(1, 6)]
 
         seg_df = pd.DataFrame({
@@ -568,13 +631,14 @@ if selected_qid:
     st.markdown(", ".join(f"**{s}**" for s in item_states) if item_states else "Unknown")
 
     # ── Bridge connections ──
-    st.markdown("#### Bridge Connections (Anti-Reform Q1+Q2)")
-    st.caption("Among anti-reformers who AGREE with this construct, what else do they support?")
+    st.markdown("#### Bridge Connections (Skeptics)")
+    st.caption("Among reform skeptics who AGREE with this topic, what else do they support?")
 
     bridges = compute_bridge_for_item(scored, segments, selected_qid)
     if bridges:
         top_bridges = bridges[:10]
         bridge_df = pd.DataFrame(top_bridges)
+        bridge_df["target"] = bridge_df["target"].apply(lambda c: CONSTRUCT_LABELS.get(c, c))
         bridge_df["lift_pct"] = bridge_df["lift"].apply(lambda x: f"{x:+.0%}")
         bridge_df["agree_pct"] = bridge_df["p_given_agree"].apply(lambda x: f"{x:.0%}")
         bridge_df["disagree_pct"] = bridge_df["p_given_disagree"].apply(lambda x: f"{x:.0%}")
@@ -613,6 +677,9 @@ if selected_qid:
         st.plotly_chart(fig_bridge, use_container_width=True)
     else:
         st.info("Not enough co-fielded data for bridge analysis. More surveys with overlapping constructs will fill this in.")
+
+# ── AI Chat ──
+render_chat("voter_segments")
 
 # ── Footer ──
 portal_footer()

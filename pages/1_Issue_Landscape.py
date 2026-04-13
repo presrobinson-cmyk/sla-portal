@@ -1,8 +1,8 @@
 """
-Message Persuasion Testing (MPT v3)
-Scatter: MrP Reach × Universality. Each dot is a scored survey item.
-Quadrants: Golden Zone / Primary Fuel / General Arsenal / Dead Weight.
-Reach from MrP-adjusted population support. Universality from party-based gap.
+Issue Landscape — SLA Portal
+Scatter: Overall Support % × Skeptic Support %. Each dot is a scored survey item.
+Quadrants: Golden Zone / Base Hardening / Coalition Building / Ineffective.
+Uses raw survey support rates (not MrP-adjusted) for accurate single-state placement.
 """
 
 import streamlit as st
@@ -18,6 +18,7 @@ from collections import defaultdict
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from auth import require_auth
+from chat_widget import render_chat
 
 # Theme
 from theme import (
@@ -36,7 +37,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 st.set_page_config(
-    page_title="Message Persuasion Testing — SLA Portal",
+    page_title="Issue Landscape — SLA Portal",
     page_icon="⚡",
     layout="wide",
 )
@@ -50,9 +51,48 @@ HEADERS = get_supabase_headers()
 # Quadrant colors
 QUAD_COLORS = {
     "Golden Zone": "#1B6B3A",
-    "Primary Fuel": "#1155AA",
-    "General Arsenal": "#B85400",
-    "Dead Weight": "#8B1A1A",
+    "Base Hardening": "#1155AA",
+    "Coalition Building": "#B85400",
+    "Ineffective": "#8B1A1A",
+}
+
+# Human-readable construct names (replace internal codes)
+CONSTRUCT_LABELS = {
+    "PD_FUNDING": "Public Defender Funding",
+    "INVEST": "Community Investment",
+    "LIT": "Literacy Programs",
+    "COUNSEL_ACCESS": "Right to Counsel",
+    "DV": "Domestic Violence",
+    "CAND-DV": "Candidates on DV",
+    "PROP": "Property Crime Reform",
+    "REDEMPTION": "Redemption / Second Chances",
+    "EXPUNGE": "Record Expungement",
+    "SENTREVIEW": "Sentence Review",
+    "JUDICIAL": "Judicial Discretion",
+    "RETRO": "Retroactive Relief",
+    "FINES": "Fines & Fees",
+    "MAND": "Mandatory Minimums",
+    "BAIL": "Bail Reform",
+    "REENTRY": "Reentry Programs",
+    "RECORD": "Criminal Record Reform",
+    "JUV": "Juvenile Justice",
+    "FAMILY": "Family Reunification",
+    "ELDERLY": "Compassionate Release",
+    "COURT": "Court Reform",
+    "COURTREVIEW": "Court Review Process",
+    "TRUST": "System Trust",
+    "PLEA": "Plea Bargaining Reform",
+    "PROS": "Prosecutor Accountability",
+    "CAND": "Candidate Favorability",
+    "TOUGHCRIME": "Tough on Crime Attitudes",
+    "ISSUE_SALIENCE": "Issue Importance",
+    "IMPACT": "Personal Impact",
+    "DETER": "Deterrence Beliefs",
+    "FISCAL": "Fiscal Responsibility",
+    "DP_ABOLITION": "Death Penalty Abolition",
+    "DP_RELIABILITY": "Death Penalty Reliability",
+    "LWOP": "Life Without Parole",
+    "COMPASSION": "Compassionate Release",
 }
 
 
@@ -178,13 +218,13 @@ def load_universality():
         if st["r_n"] >= 10 and st["d_n"] >= 10:
             r_rate = st["r_f"] / st["r_n"] * 100
             d_rate = st["d_f"] / st["d_n"] * 100
-            gap = abs(r_rate - d_rate)
-            univ = max(0, 100 - gap)
         else:
-            univ = None
+            r_rate = None
+            d_rate = None
 
         result[qid] = {
-            "universality": univ,
+            "skeptic_reach": r_rate,       # support among reform skeptics (Republican proxy)
+            "supporter_reach": d_rate,     # support among reform supporters (Democrat proxy)
             "construct": st["construct"],
             "text": st["text"],
             "n": st["all_n"],
@@ -225,54 +265,45 @@ def load_state_reach_mrp():
 # MAIN PAGE
 # ══════════════════════════════════════════════════════════════════
 
-st.title("⚡ Message Persuasion Testing")
+st.title("⚡ Issue Landscape")
 st.caption(
-    "Each dot is a scored survey item. X = MrP Reach (population support). "
-    "Y = Universality (cross-party consistency). Best messages land upper-right."
+    "Each dot is a survey question. Horizontal = support among reform skeptics. "
+    "Vertical = overall public support. Best issues land upper-right (Golden Zone)."
 )
 
 if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
     st.stop()
 
-# Load data
-mrp_reach = load_mrp_reach()
+# Load data — raw survey rates (not MrP-adjusted) for accurate placement
 univ_data = load_universality()
 
-# Merge into items list
+# Build items list from raw support rates
 items = []
-all_qids = set(mrp_reach.keys()) | set(univ_data.keys())
-for qid in all_qids:
-    mrp = mrp_reach.get(qid, {})
-    udata = univ_data.get(qid, {})
-
-    reach = mrp.get("reach")
-    if reach is None:
-        reach = udata.get("raw_reach")  # fallback to raw if no MrP
+for qid, udata in univ_data.items():
+    reach = udata.get("raw_reach")
     if reach is None:
         continue
 
-    universality = udata.get("universality")
+    skeptic_reach = udata.get("skeptic_reach")
     construct = udata.get("construct", "")
     if not construct:
         continue
 
     tier = TIER_MAP.get(construct, "")
     n = udata.get("n", 0)
-    n_surveys = mrp.get("n_surveys", 0)
     text = udata.get("text", "")
-    has_mrp = qid in mrp_reach
 
-    # Quadrant
-    if universality is not None:
-        if reach >= 50 and universality >= 50:
+    # Quadrant: Y = overall support (reach), X = skeptic reach
+    if skeptic_reach is not None:
+        if reach >= 60 and skeptic_reach >= 60:
             quad = "Golden Zone"
-        elif reach >= 50 and universality < 50:
-            quad = "Primary Fuel"
-        elif reach < 50 and universality >= 50:
-            quad = "General Arsenal"
+        elif reach >= 60 and skeptic_reach < 60:
+            quad = "Base Hardening"
+        elif reach < 60 and skeptic_reach >= 60:
+            quad = "Coalition Building"
         else:
-            quad = "Dead Weight"
+            quad = "Ineffective"
     else:
         quad = "Unknown"
 
@@ -281,12 +312,10 @@ for qid in all_qids:
         "construct": construct,
         "tier": tier,
         "reach": reach,
-        "universality": universality,
+        "skeptic_reach": skeptic_reach,
         "quadrant": quad,
         "n": n,
-        "n_surveys": n_surveys,
         "text": text,
-        "has_mrp": has_mrp,
     })
 
 if not items:
@@ -294,7 +323,7 @@ if not items:
     st.stop()
 
 df = pd.DataFrame(items)
-df_plot = df.dropna(subset=["universality"])
+df_plot = df.dropna(subset=["skeptic_reach"])
 
 # ── Sidebar filters ──
 with st.sidebar:
@@ -304,25 +333,26 @@ with st.sidebar:
     state_filter = st.selectbox("State", states, key="mpt_state")
 
     all_constructs = sorted(df["construct"].dropna().unique())
-    construct_filter = st.selectbox("Construct", ["All Constructs"] + all_constructs, key="mpt_con")
+    construct_labels_list = [CONSTRUCT_LABELS.get(c, c) for c in all_constructs]
+    construct_label_map = dict(zip(construct_labels_list, all_constructs))
+    topic_filter = st.selectbox("Topic", ["All Topics"] + sorted(construct_labels_list), key="mpt_con")
 
-    quad_filter = st.multiselect("Quadrant", list(QUAD_COLORS.keys()),
+    quad_filter = st.multiselect("Category", list(QUAD_COLORS.keys()),
                                   default=list(QUAD_COLORS.keys()), key="mpt_quad")
 
     view_mode = st.radio("View", ["Scatter", "Ranked List", "Cross-State"], key="mpt_view")
 
     st.divider()
-    mrp_count = sum(1 for i in items if i["has_mrp"])
-    st.metric("Items", f"{len(df_plot)}")
-    st.caption(f"{mrp_count} with MrP adjustment")
+    st.metric("Questions", f"{len(df_plot)}")
     for q, color in QUAD_COLORS.items():
         ct = len(df_plot[df_plot["quadrant"] == q])
         st.caption(f"● {q}: {ct}")
 
 # Apply filters
 filtered = df_plot.copy()
-if construct_filter != "All Constructs":
-    filtered = filtered[filtered["construct"] == construct_filter]
+if topic_filter != "All Topics":
+    real_construct = construct_label_map.get(topic_filter, topic_filter)
+    filtered = filtered[filtered["construct"] == real_construct]
 if quad_filter:
     filtered = filtered[filtered["quadrant"].isin(quad_filter)]
 
@@ -336,38 +366,67 @@ if filtered.empty:
 # ══════════════════════════════════════════════════════════════════
 
 if view_mode == "Scatter":
+    # Add human-readable topic label for hover
+    filtered = filtered.copy()
+    filtered["topic"] = filtered["construct"].map(CONSTRUCT_LABELS).fillna(filtered["construct"])
+
+    # Dynamic axis range — zoom into the data, don't waste space on empty 0-50 zones
+    x_min = max(0, filtered["skeptic_reach"].min() - 10)
+    x_max = min(100, filtered["skeptic_reach"].max() + 5)
+    y_min = max(0, filtered["reach"].min() - 10)
+    y_max = min(100, filtered["reach"].max() + 5)
+
+    # Quadrant threshold lines at 60% (where the quadrant split happens)
+    quad_x = 60
+    quad_y = 60
+
     fig = px.scatter(
-        filtered, x="reach", y="universality",
+        filtered, x="skeptic_reach", y="reach",
         color="quadrant",
         color_discrete_map=QUAD_COLORS,
-        hover_name="qid",
+        hover_name="topic",
         hover_data={
-            "construct": True,
-            "tier": True,
-            "reach": ":.1f",
-            "universality": ":.1f",
+            "reach": ":.0f",
+            "skeptic_reach": ":.0f",
             "n": ":,",
-            "quadrant": False,
+            "quadrant": True,
+            "construct": False,
+            "tier": False,
             "text": False,
-            "has_mrp": False,
-            "n_surveys": False,
+            "qid": False,
+            "topic": False,
         },
         size="n",
-        size_max=18,
-        labels={"reach": "MrP Reach %", "universality": "Universality"},
+        size_max=14,
+        opacity=0.75,
+        labels={
+            "skeptic_reach": "Skeptic Support %",
+            "reach": "Overall Support %",
+            "n": "Respondents",
+            "quadrant": "Category",
+        },
     )
 
-    fig.add_hline(y=50, line_dash="dash", line_color="#D4D0C8", line_width=1)
-    fig.add_vline(x=50, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    # Quadrant dividers
+    if quad_y >= y_min and quad_y <= y_max:
+        fig.add_hline(y=quad_y, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    if quad_x >= x_min and quad_x <= x_max:
+        fig.add_vline(x=quad_x, line_dash="dash", line_color="#D4D0C8", line_width=1)
 
-    fig.add_annotation(x=25, y=95, text="General Arsenal", showarrow=False,
-                       font=dict(color="#B85400", size=11), opacity=0.8)
-    fig.add_annotation(x=75, y=95, text="Golden Zone", showarrow=False,
-                       font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.9)
-    fig.add_annotation(x=25, y=5, text="Dead Weight", showarrow=False,
-                       font=dict(color="#8B1A1A", size=11), opacity=0.8)
-    fig.add_annotation(x=75, y=5, text="Primary Fuel", showarrow=False,
-                       font=dict(color="#1155AA", size=11), opacity=0.8)
+    # Quadrant labels — position relative to the visible range
+    label_left_x = max(x_min + 2, (x_min + quad_x) / 2)
+    label_right_x = min(x_max - 2, (quad_x + x_max) / 2)
+    label_top_y = min(y_max - 1, y_max - 2)
+    label_bot_y = max(y_min + 1, y_min + 2)
+
+    fig.add_annotation(x=label_left_x, y=label_top_y, text="Base Hardening", showarrow=False,
+                       font=dict(color="#1155AA", size=11), opacity=0.6)
+    fig.add_annotation(x=label_right_x, y=label_top_y, text="Golden Zone", showarrow=False,
+                       font=dict(color="#1B6B3A", size=13, family="Playfair Display"), opacity=0.85)
+    fig.add_annotation(x=label_left_x, y=label_bot_y, text="Ineffective", showarrow=False,
+                       font=dict(color="#8B1A1A", size=11), opacity=0.6)
+    fig.add_annotation(x=label_right_x, y=label_bot_y, text="Coalition Building", showarrow=False,
+                       font=dict(color="#B85400", size=11), opacity=0.6)
 
     fig.update_layout(
         template="plotly_white",
@@ -375,9 +434,9 @@ if view_mode == "Scatter":
         plot_bgcolor=CARD_BG,
         height=600,
         margin=dict(l=60, r=20, t=40, b=60),
-        xaxis=dict(range=[0, 100], dtick=10, gridcolor="#E8E4DC",
+        xaxis=dict(range=[x_min, x_max], dtick=10, gridcolor="#E8E4DC",
                    title_font=dict(color=NAVY)),
-        yaxis=dict(range=[0, 100], dtick=10, gridcolor="#E8E4DC",
+        yaxis=dict(range=[y_min, y_max], dtick=10, gridcolor="#E8E4DC",
                    title_font=dict(color=NAVY)),
         legend=dict(
             font=dict(size=10, color=NAVY),
@@ -404,23 +463,30 @@ if view_mode == "Scatter":
     if not selected_qid:
         qid_opts = sorted(filtered["qid"].tolist())
         if qid_opts:
-            selected_qid = st.selectbox("Select an item:", ["(click a dot above)"] + qid_opts)
-            if selected_qid == "(click a dot above)":
-                selected_qid = None
+            # Show human-readable labels in the dropdown
+            qid_to_label = {}
+            for _, r in filtered.iterrows():
+                label = CONSTRUCT_LABELS.get(r["construct"], r["construct"])
+                qid_to_label[r["qid"]] = f"{label}: {r['text'][:60]}..." if r.get("text") else label
+            label_opts = ["(click a dot above)"] + [qid_to_label.get(q, q) for q in qid_opts]
+            sel = st.selectbox("Select a question:", label_opts)
+            if sel != "(click a dot above)":
+                # Map label back to qid
+                label_to_qid = {v: k for k, v in qid_to_label.items()}
+                selected_qid = label_to_qid.get(sel)
 
     if selected_qid and selected_qid in filtered["qid"].values:
         row = filtered[filtered["qid"] == selected_qid].iloc[0]
+        topic_label = CONSTRUCT_LABELS.get(row["construct"], row["construct"])
         st.divider()
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("MrP Reach", f"{row['reach']:.1f}%")
-        c2.metric("Universality", f"{row['universality']:.1f}")
-        c3.metric("Quadrant", row["quadrant"])
-        c4.metric("Responses", f"{row['n']:,}")
+        c1.metric("Overall Support", f"{row['reach']:.0f}%")
+        c2.metric("Skeptic Support", f"{row['skeptic_reach']:.0f}%")
+        c3.metric("Category", row["quadrant"])
+        c4.metric("Respondents", f"{row['n']:,}")
 
-        tier_html = tier_badge_html(row["construct"]) if row["construct"] else ""
         st.markdown(
-            f'{tier_html} &nbsp; <strong>{row["construct"]}</strong> &nbsp; '
-            f'<span style="color:{TEXT3};">{row["qid"]}</span>',
+            f'<div style="font-size:1.1rem;font-weight:700;color:{NAVY};margin-bottom:0.5rem;">{topic_label}</div>',
             unsafe_allow_html=True)
         if row.get("text"):
             st.markdown(f'<div class="detail-card">{row["text"]}</div>', unsafe_allow_html=True)
@@ -431,20 +497,19 @@ if view_mode == "Scatter":
 # ══════════════════════════════════════════════════════════════════
 
 elif view_mode == "Ranked List":
-    st.markdown("#### Ranked by MrP Reach (strongest first)")
+    st.markdown("#### Ranked by Overall Support (strongest first)")
     ranked = filtered.sort_values("reach", ascending=False)
 
-    display_df = ranked[["qid", "construct", "tier", "reach", "universality", "quadrant", "n"]].copy()
-    display_df.columns = ["Item", "Construct", "Tier", "Reach %", "Universality", "Quadrant", "Responses"]
-    display_df["Reach %"] = display_df["Reach %"].apply(lambda x: f"{x:.1f}")
-    display_df["Universality"] = display_df["Universality"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "—")
+    display_df = ranked[["construct", "reach", "skeptic_reach", "quadrant", "n"]].copy()
+    display_df["Topic"] = display_df["construct"].map(CONSTRUCT_LABELS).fillna(display_df["construct"])
+    display_df = display_df[["Topic", "reach", "skeptic_reach", "quadrant", "n"]]
+    display_df.columns = ["Topic", "Overall Support %", "Skeptic Support %", "Category", "Respondents"]
+    display_df["Overall Support %"] = display_df["Overall Support %"].apply(lambda x: f"{x:.0f}%")
+    display_df["Skeptic Support %"] = display_df["Skeptic Support %"].apply(lambda x: f"{x:.0f}%" if pd.notna(x) else "—")
     display_df = display_df.reset_index(drop=True)
     display_df.index = display_df.index + 1
 
     st.dataframe(display_df, use_container_width=True, height=500)
-
-    csv = ranked[["qid", "construct", "tier", "reach", "universality", "quadrant", "n", "text"]].to_csv(index=False)
-    st.download_button("Download CSV", csv, "mpt_ranked.csv", "text/csv")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -452,8 +517,8 @@ elif view_mode == "Ranked List":
 # ══════════════════════════════════════════════════════════════════
 
 elif view_mode == "Cross-State":
-    st.markdown("#### Cross-State MrP Reach Comparison")
-    st.caption("Same question, different states. Spread = max − min. Low spread = transfers across states.")
+    st.markdown("#### Cross-State Support Comparison")
+    st.caption("Same question asked in multiple states. Low spread = message transfers well across state lines.")
 
     state_reach = load_state_reach_mrp()
 
@@ -500,5 +565,7 @@ elif view_mode == "Cross-State":
     else:
         st.info("Not enough cross-state MrP data.")
 
+
+render_chat("issue_landscape")
 
 portal_footer()

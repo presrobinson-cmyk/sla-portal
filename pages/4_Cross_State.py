@@ -18,6 +18,7 @@ from theme import (
     NAVY, GOLD, TEXT3, BORDER2, CARD_BG
 )
 from auth import require_auth
+from chat_widget import render_chat
 
 st.set_page_config(
     page_title="Cross-State — SLA Portal",
@@ -159,7 +160,23 @@ for state in sorted(surveys_by_state.keys()):
         reverse=True
     )[:4]
 
-    # Render card
+    # Build question bars HTML
+    questions_html = ""
+    for q in top_4:
+        cb_score = float(q.get("cb_score") or 0)
+        question_text = q.get("question_text", "Unknown")[:80]
+        bar_width = cb_score * 100
+        questions_html += f"""
+        <div style="margin-bottom:0.5rem;">
+            <div style="font-size:0.8rem;color:{NAVY};margin-bottom:2px;font-weight:500;">{question_text}</div>
+            <div style="width:100%;height:6px;background:{BORDER2};border-radius:3px;overflow:hidden;">
+                <div style="width:{bar_width}%;height:100%;background:{state_color};"></div>
+            </div>
+            <div style="font-size:0.7rem;color:{TEXT3};margin-top:2px;">CB Score: {cb_score:.2f}</div>
+        </div>
+        """
+
+    # Render entire card as one self-contained HTML block
     st.markdown(f"""
     <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;padding:1.5rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:1rem;">
@@ -169,7 +186,6 @@ for state in sorted(surveys_by_state.keys()):
                 <div style="font-size:0.8rem;color:{TEXT3};">{len(state_surveys)} survey{'' if len(state_surveys) == 1 else 's'}</div>
             </div>
         </div>
-
         <div style="display:flex;gap:2rem;margin-bottom:1.5rem;">
             <div>
                 <div style="color:{state_color};font-weight:600;font-size:1.2rem;">{total_respondents:,}</div>
@@ -180,29 +196,12 @@ for state in sorted(surveys_by_state.keys()):
                 <div style="font-size:0.75rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.05em;">Golden Zone</div>
             </div>
         </div>
-
         <div style="border-top:1px solid {BORDER2};padding-top:1rem;">
             <div style="font-size:0.8rem;font-weight:600;color:{TEXT3};text-transform:uppercase;margin-bottom:0.75rem;">Top 4 questions</div>
-    """, unsafe_allow_html=True)
-
-    # Top 4 questions with mini bars
-    for q in top_4:
-        cb_score = float(q.get("cb_score") or 0)
-        question_text = q.get("question_text", "Unknown")[:80]
-
-        # Mini horizontal bar
-        bar_width = cb_score * 100  # Assume 0-1 scale
-        st.markdown(f"""
-        <div style="margin-bottom:0.5rem;">
-            <div style="font-size:0.8rem;color:{NAVY};margin-bottom:2px;font-weight:500;">{question_text}</div>
-            <div style="width:100%;height:6px;background:{BORDER2};border-radius:3px;overflow:hidden;">
-                <div style="width:{bar_width}%;height:100%;background:{state_color};"></div>
-            </div>
-            <div style="font-size:0.7rem;color:{TEXT3};margin-top:2px;">CB Score: {cb_score:.2f}</div>
+            {questions_html}
         </div>
-        """, unsafe_allow_html=True)
-
-    st.markdown("</div>", unsafe_allow_html=True)
+    </div>
+    """, unsafe_allow_html=True)
 
 st.divider()
 
@@ -286,5 +285,7 @@ st.info(
     "🔄 **Transfer Ratings:** Direct transfer (spread ≤ 0.08) = message works consistently across states. Needs adaptation (0.08–0.15) = core message works, customize framing. State-specific (>0.15) = different audiences need different approaches.",
     icon="ℹ️"
 )
+
+render_chat("cross_state")
 
 portal_footer()

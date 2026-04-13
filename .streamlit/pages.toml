@@ -1,0 +1,44 @@
+[[pages]]
+path = "app.py"
+name = "Home"
+icon = "🏠"
+
+[[pages]]
+path = "pages/8_State_Report.py"
+name = "State Report"
+icon = "📊"
+
+[[pages]]
+path = "pages/1_Issue_Landscape.py"
+name = "Issue Landscape"
+icon = "⚡"
+
+[[pages]]
+path = "pages/2_Voter_Segments.py"
+name = "Voter Segments"
+icon = "🎯"
+
+[[pages]]
+path = "pages/3_Persuasion_Pathways.py"
+name = "Persuasion Pathways"
+icon = "🧩"
+
+[[pages]]
+path = "pages/4_Cross_State.py"
+name = "Cross-State"
+icon = "🗺️"
+
+[[pages]]
+path = "pages/5_MediaMaker.py"
+name = "MediaMaker"
+icon = "📢"
+
+[[pages]]
+path = "pages/6_SurveyMaker.py"
+name = "SurveyMaker"
+icon = "✏️"
+
+[[pages]]
+path = "pages/7_AI_Analysis.py"
+name = "AI Analysis"
+icon = "🤖"
