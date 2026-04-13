@@ -21,7 +21,7 @@ from chat_widget import render_chat
 
 # Theme
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, SURVEY_STATE, TIER_MAP,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
 )
@@ -33,6 +33,9 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+# Shared data loader (MrP primary for Overall column)
+from data_loader import load_question_data_hybrid
 
 st.set_page_config(page_title="Voter Segments — SLA Portal", page_icon="🎯", layout="wide")
 
@@ -271,6 +274,21 @@ def load_segment_data():
                 construct_subgroup_stats[construct][subgroup]["fav"] += s["fav"]
                 construct_subgroup_stats[construct][subgroup]["n"] += 1
 
+    # Load MrP-adjusted rates for Overall column
+    mrp_question_data, _mrp_cov = load_question_data_hybrid()
+    # Aggregate MrP rates by construct (weighted average)
+    mrp_construct_overall = {}
+    _c_agg = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0})
+    for qid, qd in mrp_question_data.items():
+        c = qd.get("construct")
+        if c and qd["display_pct"] is not None:
+            n = qd["n_respondents"]
+            _c_agg[c]["sum_pct_n"] += qd["display_pct"] * n
+            _c_agg[c]["sum_n"] += n
+    for c, agg in _c_agg.items():
+        if agg["sum_n"] > 0:
+            mrp_construct_overall[c] = agg["sum_pct_n"] / agg["sum_n"]
+
     # Build heatmap data: exclude GAUGE_CONSTRUCTS
     heatmap_data = {}
     for construct, subgroup_stats in construct_subgroup_stats.items():
@@ -279,20 +297,27 @@ def load_segment_data():
 
         row = {}
         for subgroup in DEMOGRAPHIC_SUBGROUPS:
-            stats = subgroup_stats.get(subgroup, {"fav": 0, "n": 0})
-            n = stats["n"]
-            # Require at least 30 responses
-            if n >= 30:
-                support_pct = stats["fav"] / n * 100
-                row[subgroup] = {
-                    "pct": support_pct,
-                    "n": n,
-                }
+            if subgroup == "Overall":
+                # Use MrP-adjusted rate for Overall if available
+                mrp_rate = mrp_construct_overall.get(construct)
+                raw_stats = subgroup_stats.get("Overall", {"fav": 0, "n": 0})
+                n = raw_stats["n"]
+                if mrp_rate is not None and n >= 30:
+                    row[subgroup] = {"pct": mrp_rate, "n": n}
+                elif n >= 30:
+                    row[subgroup] = {"pct": raw_stats["fav"] / n * 100, "n": n}
+                else:
+                    row[subgroup] = {"pct": None, "n": n}
             else:
-                row[subgroup] = {
-                    "pct": None,
-                    "n": n,
-                }
+                # Demographic subgroups use raw data
+                # (MrP cells are race|age|edu|sex — party/ideology not modeled)
+                stats = subgroup_stats.get(subgroup, {"fav": 0, "n": 0})
+                n = stats["n"]
+                if n >= 30:
+                    support_pct = stats["fav"] / n * 100
+                    row[subgroup] = {"pct": support_pct, "n": n}
+                else:
+                    row[subgroup] = {"pct": None, "n": n}
 
         # Only include construct if Overall has enough data
         if row.get("Overall", {}).get("pct") is not None:
@@ -329,6 +354,7 @@ def get_cell_color(support_pct):
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🎯 Voter Segments")
+data_source_badge("mrp")
 st.markdown(
     "Support rates for criminal justice reform topics broken down by demographic subgroups. "
     "Green indicates strong support (75%+), gold moderate support (60-74%), and red opposition (below 50%). "
@@ -366,10 +392,26 @@ with st.sidebar:
 if view_mode == "Coalition Heatmap":
     st.subheader("Support by Topic and Demographic")
     st.caption(
-        "Each row is a reform topic, sorted by persuasion tier. "
-        "Each column is a demographic subgroup. "
-        "Hover for exact percentages and sample sizes."
+        "Each row is a reform topic. Each column is a demographic subgroup. "
+        "Green = 75%+ support, gold = 60-74%, red = below 50%."
     )
+
+    # Subgroup category selector — show one category at a time to avoid cramming
+    subgroup_categories = {
+        "Party": ["Overall", "Republicans", "Democrats", "Independents"],
+        "Ideology": ["Overall", "Conservatives", "Moderates", "Liberals"],
+        "Race / Ethnicity": ["Overall", "White", "Black", "Hispanic"],
+        "Age": ["Overall", "Age 18-34", "Age 35-54", "Age 55+"],
+        "Gender": ["Overall", "Male", "Female"],
+    }
+
+    cat_choice = st.radio(
+        "Demographic group:",
+        list(subgroup_categories.keys()),
+        horizontal=True,
+        key="hm_cat",
+    )
+    display_subgroups = subgroup_categories[cat_choice]
 
     # Sort constructs by tier, then by label
     constructs_sorted = sorted(
@@ -377,68 +419,76 @@ if view_mode == "Coalition Heatmap":
         key=lambda c: (TIER_MAP.get(c, "ZZZ"), CONSTRUCT_LABELS.get(c, c))
     )
 
-    # Build matrix
-    z_values = []
-    hover_texts = []
-    topic_labels = []
+    def _cell_style(pct):
+        """Return CSS for a heatmap cell based on support percentage."""
+        if pct is None:
+            return f"color:{TEXT3};background:{CARD_BG};"
+        elif pct >= 75:
+            return "color:#1B6B3A;background:rgba(27,107,58,0.12);font-weight:600;"
+        elif pct >= 60:
+            return "color:#B8870A;background:rgba(184,135,10,0.12);font-weight:500;"
+        elif pct < 50:
+            return "color:#8B1A1A;background:rgba(139,26,26,0.12);font-weight:600;"
+        else:
+            return f"color:{NAVY};background:rgba(14,31,61,0.05);"
 
-    for construct in constructs_sorted:
-        row_z = []
-        row_hover = []
-        topic_labels.append(CONSTRUCT_LABELS.get(construct, construct))
-
-        for subgroup in DEMOGRAPHIC_SUBGROUPS:
-            cell_data = heatmap_data[construct].get(subgroup, {})
-            pct = cell_data.get("pct")
-            n = cell_data.get("n", 0)
-
-            if pct is not None:
-                row_z.append(pct)
-                row_hover.append(f"{CONSTRUCT_LABELS.get(construct, construct)}<br>{subgroup}<br>{pct:.1f}% (n={n})")
-            else:
-                row_z.append(None)
-                row_hover.append(f"{CONSTRUCT_LABELS.get(construct, construct)}<br>{subgroup}<br>Insufficient data (n={n})")
-
-        z_values.append(row_z)
-        hover_texts.append(row_hover)
-
-    # Create Plotly heatmap
-    fig = go.Figure(data=go.Heatmap(
-        z=z_values,
-        x=DEMOGRAPHIC_SUBGROUPS,
-        y=[f"{label}  •  {TIER_MAP.get(c, '')}" for label, c in zip(topic_labels, constructs_sorted)],
-        hovertext=hover_texts,
-        hoverinfo="text",
-        colorscale=[
-            [0.0, "#8B1A1A"],     # red for low support
-            [0.4, "#F5E6CC"],     # neutral cream
-            [0.6, "#C5E1A5"],     # light green
-            [1.0, "#1B6B3A"],     # dark green for high support
-        ],
-        zmin=20,
-        zmax=95,
-        text=[[f"{v:.0f}%" if v is not None else "—" for v in row] for row in z_values],
-        texttemplate="%{text}",
-        textfont=dict(size=10, color=NAVY),
-        colorbar=dict(title="Support %", thickness=15, len=0.7),
-    ))
-
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor=BG,
-        plot_bgcolor=CARD_BG,
-        height=max(600, len(constructs_sorted) * 25 + 150),
-        margin=dict(l=320, r=100, t=40, b=120),
-        xaxis=dict(
-            side="bottom",
-            tickfont=dict(size=11, color=NAVY),
-            tickangle=45,
-        ),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=10, color=NAVY)),
-        font=dict(family="DM Sans", color=NAVY),
+    # Build HTML table
+    header_cells = "".join(
+        f'<th style="padding:8px 12px;font-size:0.8rem;font-weight:600;color:{NAVY};'
+        f'text-align:center;border-bottom:2px solid {BORDER2};min-width:70px;">{sg}</th>'
+        for sg in display_subgroups
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="coalition_heatmap")
+    rows_html = ""
+    current_tier = None
+    for construct in constructs_sorted:
+        label = CONSTRUCT_LABELS.get(construct, construct)
+        tier = TIER_MAP.get(construct, "—")
+
+        # Tier separator row
+        if tier != current_tier:
+            current_tier = tier
+            tier_style = TIER_STYLES.get(tier, TIER_STYLES.get("Downstream", {}))
+            t_color = tier_style.get("color", NAVY)
+            t_bg = tier_style.get("bg", "transparent")
+            rows_html += (
+                f'<tr><td colspan="{len(display_subgroups) + 1}" style="padding:6px 12px;'
+                f'background:{t_bg};color:{t_color};font-weight:700;font-size:0.8rem;'
+                f'border-top:2px solid {BORDER2};font-family:Playfair Display,serif;">{tier}</td></tr>'
+            )
+
+        cells = ""
+        for sg in display_subgroups:
+            cell_data = heatmap_data[construct].get(sg, {})
+            pct = cell_data.get("pct")
+            n = cell_data.get("n", 0)
+            style = _cell_style(pct)
+            val = f"{pct:.0f}%" if pct is not None else "—"
+            cells += f'<td style="padding:6px 10px;text-align:center;font-size:0.85rem;{style}" title="{sg}: {val} (n={n})">{val}</td>'
+
+        rows_html += (
+            f'<tr style="border-bottom:1px solid {BORDER2};">'
+            f'<td style="padding:6px 12px;font-size:0.85rem;color:{NAVY};font-weight:500;'
+            f'white-space:nowrap;">{label}</td>'
+            f'{cells}</tr>'
+        )
+
+    st.markdown(f"""
+    <div style="overflow-x:auto;border:1px solid {BORDER2};border-radius:10px;background:{CARD_BG};">
+        <table style="width:100%;border-collapse:collapse;font-family:DM Sans,sans-serif;">
+            <thead>
+                <tr style="background:{BG};">
+                    <th style="padding:8px 12px;font-size:0.8rem;font-weight:600;color:{NAVY};
+                        text-align:left;border-bottom:2px solid {BORDER2};min-width:180px;">Topic</th>
+                    {header_cells}
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── Summary statistics ──
     st.markdown("#### Strongest Support")

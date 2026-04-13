@@ -11,7 +11,7 @@ import sys
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import (
-    apply_theme, portal_footer, TIER_MAP,
+    apply_theme, portal_footer, data_source_badge, TIER_MAP,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
 )
 from auth import require_auth
@@ -282,6 +282,7 @@ FRAMEWORK_MAP = {
 # ─────────────────────────────────────────────────────────────────
 
 st.title("MediaMaker")
+data_source_badge("mrp")
 st.markdown(
     "Select a reform topic → see evidence-based messaging guidance to persuade your audience.",
     unsafe_allow_html=True,
@@ -293,30 +294,39 @@ st.divider()
 # TOPIC PICKER
 # ─────────────────────────────────────────────────────────────────
 
-st.markdown("### Step 1: Select a Topic")
+st.markdown(f"""
+<div style="font-family:'Playfair Display',serif;font-size:1.15rem;font-weight:700;color:{NAVY};
+     margin-bottom:0.5rem;">Step 1: Pick Your Reform Topic</div>
+<div style="font-size:0.88rem;color:{TEXT2};margin-bottom:0.75rem;">
+    Choose the issue you want to build messaging around. The guidance below will update automatically.
+</div>
+""", unsafe_allow_html=True)
 
 # Filter out gauge constructs
 topic_options = {k: v for k, v in CONSTRUCT_LABELS.items() if k not in GAUGE_CONSTRUCTS}
 sorted_topics = sorted(topic_options.items(), key=lambda x: x[1])
+topic_labels_list = [label for _, label in sorted_topics]
+label_to_code = {label: code for code, label in sorted_topics}
 
-selected_construct = st.selectbox(
-    "Choose a reform topic:",
-    options=[code for code, _ in sorted_topics],
-    format_func=lambda code: f"{CONSTRUCT_LABELS[code]}",
+selected_label = st.selectbox(
+    "Reform topic:",
+    options=topic_labels_list,
     key="topic_picker",
 )
+selected_construct = label_to_code.get(selected_label, "")
 
-st.markdown("")
-
-# Show selected topic details
-selected_label = CONSTRUCT_LABELS[selected_construct]
 selected_tier = TIER_MAP.get(selected_construct, "Unknown")
 
-col1, col2 = st.columns([2, 1])
-with col1:
-    st.markdown(f"**Selected Topic:** {selected_label}")
-with col2:
-    st.markdown(f"**Persuasion Tier:** {selected_tier}")
+st.markdown(f"""
+<div style="display:flex;gap:24px;align-items:center;margin:0.5rem 0;">
+    <div style="font-size:0.9rem;color:{NAVY};">
+        <strong>Topic:</strong> {selected_label}
+    </div>
+    <div style="font-size:0.9rem;color:{TEXT2};">
+        <strong>Persuasion Tier:</strong> {selected_tier}
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 st.divider()
 

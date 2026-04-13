@@ -13,7 +13,7 @@ from collections import defaultdict
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, TIER_MAP,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
 )
@@ -174,6 +174,7 @@ def load_and_score_questions():
 # ─────────────────────────────────────────────────────────────────
 
 st.title("SurveyMaker")
+data_source_badge("mrp")
 st.markdown(
     "Browse scored questions from the question bank · filter by topic and persuasion tier · assemble surveys"
 )

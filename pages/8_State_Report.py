@@ -13,7 +13,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, SURVEY_STATE, STATE_COLORS, STATE_ABBR, TIER_MAP, TIER_STYLES,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, CARD_BG,
 )
@@ -26,6 +26,9 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+# Shared data loader (MrP primary, raw fallback)
+from data_loader import load_state_question_data, _paginate as paginate_supabase
 
 # Human-readable topic names
 CONSTRUCT_LABELS = {
@@ -108,6 +111,7 @@ for i, abbr in enumerate(all_active_abbrs):
             st.rerun()
 
 st.markdown("")  # spacing
+data_source_badge("mrp")
 
 state_name = ABBR_TO_STATE.get(selected_abbr, selected_abbr)
 state_color = STATE_COLORS.get(state_name, "#8C8984")
@@ -124,12 +128,12 @@ if not SCORING_AVAILABLE:
 
 @st.cache_data(ttl=3600, show_spinner="Loading state data...")
 def load_state_data(state_survey_ids):
-    """Pull raw L2 responses and L1 counts, score at runtime."""
+    """Load state data using MrP-adjusted rates (primary), raw fallback.
+    Returns respondent_counts, questions, topics.
+    """
+    # Get respondent counts from L1 (always needed for display)
     respondent_counts = {}
-    all_rows = []
-
     for sid in state_survey_ids:
-        # Respondent count
         try:
             r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/l1_respondents?select=respondent_id&survey_id=eq.{sid}&limit=1",
@@ -140,80 +144,41 @@ def load_state_data(state_survey_ids):
         except Exception:
             respondent_counts[sid] = 0
 
-        # Raw responses
-        offset = 0
-        while True:
-            r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/l2_responses"
-                f"?select=respondent_id,survey_id,question_id,question_text,response"
-                f"&survey_id=eq.{sid}&offset={offset}&limit=1000",
-                headers=HEADERS, timeout=30,
-            )
-            if r.status_code != 200:
-                break
-            rows = r.json()
-            all_rows.extend(rows)
-            if len(rows) < 1000:
-                break
-            offset += 1000
+    # Load hybrid MrP + raw question data
+    question_data, has_mrp, has_raw = load_state_question_data(
+        list(state_survey_ids), state_name=state_name
+    )
 
-    # Score all responses
-    scored = []
-    qid_text = {}
-    for r in all_rows:
-        qid = r.get("question_id")
-        if not qid or qid in SKIPPED_QIDS:
-            continue
-        construct = get_construct(qid)
-        if not construct:
-            continue
-        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
-        if fav is None:
-            continue
-        scored.append({
-            "qid": qid,
-            "construct": construct,
-            "fav": 1 if fav == 1 else 0,
-        })
-        if qid not in qid_text and r.get("question_text"):
-            qid_text[qid] = r["question_text"]
-
-    # Aggregate per question
-    q_stats = defaultdict(lambda: {"fav": 0, "n": 0, "construct": "", "text": ""})
-    for s in scored:
-        q_stats[s["qid"]]["fav"] += s["fav"]
-        q_stats[s["qid"]]["n"] += 1
-        q_stats[s["qid"]]["construct"] = s["construct"]
-        q_stats[s["qid"]]["text"] = qid_text.get(s["qid"], "")
-
+    # Build question list
     questions = []
-    for qid, qs in q_stats.items():
-        if qs["n"] < 5:
-            continue
+    for qid, qd in question_data.items():
         questions.append({
             "qid": qid,
-            "construct": qs["construct"],
-            "text": qs["text"],
-            "support_pct": qs["fav"] / qs["n"] * 100,
-            "n": qs["n"],
+            "construct": qd["construct"],
+            "text": qd["question_text"],
+            "support_pct": qd["display_pct"],
+            "n": qd["n_respondents"],
+            "source": qd["source"],
         })
 
-    # Aggregate per construct (topic)
-    c_stats = defaultdict(lambda: {"fav": 0, "n": 0, "qids": set()})
-    for s in scored:
-        c_stats[s["construct"]]["fav"] += s["fav"]
-        c_stats[s["construct"]]["n"] += 1
-        c_stats[s["construct"]]["qids"].add(s["qid"])
+    # Aggregate to construct (topic) level — weighted average
+    c_agg = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0, "qids": set()})
+    for qid, qd in question_data.items():
+        c = qd["construct"]
+        n = qd["n_respondents"]
+        c_agg[c]["sum_pct_n"] += qd["display_pct"] * n
+        c_agg[c]["sum_n"] += n
+        c_agg[c]["qids"].add(qid)
 
     topics = []
-    for c, cs in c_stats.items():
-        if cs["n"] < 10:
+    for c, cs in c_agg.items():
+        if cs["sum_n"] < 10:
             continue
         topics.append({
             "construct": c,
-            "support_pct": cs["fav"] / cs["n"] * 100,
+            "support_pct": cs["sum_pct_n"] / cs["sum_n"],
             "n_questions": len(cs["qids"]),
-            "n_responses": cs["n"],
+            "n_responses": cs["sum_n"],
         })
 
     return respondent_counts, questions, topics

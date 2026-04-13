@@ -13,7 +13,7 @@ from collections import defaultdict
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, SURVEY_STATE, TIER_MAP, tier_badge_html, TIER_STYLES,
     NAVY, GOLD, GOLD_MID, CARD_BG, TEXT1, TEXT2, TEXT3, BORDER, BORDER2, BG,
     STATE_COLORS, STATE_ABBR,
@@ -27,6 +27,9 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+# Shared data loader (MrP primary, raw fallback)
+from data_loader import load_question_data_hybrid
 
 # Human-readable construct names
 CONSTRUCT_LABELS = {
@@ -210,6 +213,17 @@ def load_construct_data():
             q_stats[qid]["q1_f"] += s["fav"]
             q_stats[qid]["q1_n"] += 1
 
+    # Load MrP-adjusted overall rates for constructs
+    mrp_question_data, _mrp_cov = load_question_data_hybrid()
+    # Aggregate MrP rates by construct (weighted average)
+    mrp_construct_rates = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0})
+    for qid, qd in mrp_question_data.items():
+        c = qd.get("construct")
+        if c and qd["display_pct"] is not None:
+            n = qd["n_respondents"]
+            mrp_construct_rates[c]["sum_pct_n"] += qd["display_pct"] * n
+            mrp_construct_rates[c]["sum_n"] += n
+
     constructs = []
     for c, st in con_stats.items():
         if st["all_n"] < 20:
@@ -217,7 +231,11 @@ def load_construct_data():
         tier = TIER_MAP.get(c, "Unassigned")
         q1_rate = (st["q1_f"] / st["q1_n"] * 100) if st["q1_n"] > 10 else None
         q5_rate = (st["q5_f"] / st["q5_n"] * 100) if st["q5_n"] > 10 else None
-        overall = st["all_f"] / st["all_n"] * 100
+        # Use MrP-adjusted overall rate when available, else raw
+        if c in mrp_construct_rates and mrp_construct_rates[c]["sum_n"] > 0:
+            overall = mrp_construct_rates[c]["sum_pct_n"] / mrp_construct_rates[c]["sum_n"]
+        else:
+            overall = st["all_f"] / st["all_n"] * 100
         constructs.append({
             "construct": c,
             "tier": tier,
@@ -258,6 +276,7 @@ def load_construct_data():
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🧩 Persuasion Architecture")
+data_source_badge("mrp")
 st.markdown(
     "Topics organized by their role in reaching reform skeptics. "
     "Entry tiers are the foothold. Bridge is the wedge. Downstream proposals follow once agreement accumulates."

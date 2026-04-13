@@ -22,7 +22,7 @@ from chat_widget import render_chat
 
 # Theme
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, SURVEY_STATE, TIER_MAP, tier_badge_html,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
     STATE_COLORS, STATE_ABBR,
@@ -35,6 +35,9 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+# Shared data loader (MrP primary, raw fallback)
+from data_loader import load_question_data_hybrid, load_party_splits
 
 st.set_page_config(
     page_title="Issue Landscape — SLA Portal",
@@ -129,78 +132,26 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 
 @st.cache_data(ttl=3600, show_spinner="Loading survey data...")
 def load_question_data():
-    """Load all question-level data: support rate, skeptic support, construct, text.
+    """Load all question-level data using MrP-adjusted rates (primary)
+    with raw fallback for surveys not yet in MrP.
     Returns a dict keyed by QID with per-question stats.
     """
-    # Pull L2 responses
-    all_l2 = []
-    for sid in CJ_SURVEYS:
-        rows = _paginate(
-            f"{SUPABASE_URL}/rest/v1/l2_responses"
-            f"?select=respondent_id,survey_id,question_id,question_text,response"
-            f"&survey_id=eq.{sid}",
-            HEADERS,
-        )
-        all_l2.extend(rows)
+    question_data, mrp_coverage = load_question_data_hybrid()
+    party_data = load_party_splits()
 
-    # Pull L1 party
-    all_l1 = []
-    for sid in CJ_SURVEYS:
-        rows = _paginate(
-            f"{SUPABASE_URL}/rest/v1/l1_respondents"
-            f"?select=respondent_id,party_id"
-            f"&survey_id=eq.{sid}",
-            HEADERS,
-        )
-        all_l1.extend(rows)
-
-    party_lookup = {d["respondent_id"]: d.get("party_id", "") for d in all_l1}
-
-    # Score responses and compute party-split rates
-    q_stats = defaultdict(lambda: {
-        "r_f": 0, "r_n": 0, "d_f": 0, "d_n": 0, "all_f": 0, "all_n": 0,
-        "construct": None, "text": "",
-    })
-
-    for r in all_l2:
-        qid = r.get("question_id")
-        if not qid or qid in SKIPPED_QIDS:
-            continue
-        construct = get_construct(qid)
-        if not construct:
-            continue
-        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
-        if fav is None:
-            continue
-        is_fav = 1 if fav == 1 else 0
-
-        q_stats[qid]["all_f"] += is_fav
-        q_stats[qid]["all_n"] += 1
-        q_stats[qid]["construct"] = construct
-        if r.get("question_text"):
-            q_stats[qid]["text"] = r["question_text"]
-
-        party = party_lookup.get(r["respondent_id"], "")
-        if party and "republican" in party.lower():
-            q_stats[qid]["r_f"] += is_fav
-            q_stats[qid]["r_n"] += 1
-        elif party and "democrat" in party.lower():
-            q_stats[qid]["d_f"] += is_fav
-            q_stats[qid]["d_n"] += 1
+    # Store coverage info in session state for badge display
+    st.session_state["mrp_coverage"] = mrp_coverage
 
     result = {}
-    for qid, s in q_stats.items():
-        if s["all_n"] < 20:
-            continue
-        r_rate = (s["r_f"] / s["r_n"] * 100) if s["r_n"] >= 10 else None
-        d_rate = (s["d_f"] / s["d_n"] * 100) if s["d_n"] >= 10 else None
-
+    for qid, qd in question_data.items():
+        party = party_data.get(qid, {})
         result[qid] = {
-            "skeptic_support": r_rate,
-            "overall_support": s["all_f"] / s["all_n"] * 100,
-            "construct": s["construct"],
-            "text": s["text"],
-            "n": s["all_n"],
+            "skeptic_support": party.get("r_pct"),  # Republican rate (always raw — party not in MrP cells)
+            "overall_support": qd["display_pct"],    # MrP-adjusted when available
+            "construct": qd["construct"],
+            "text": qd["question_text"],
+            "n": qd["n_respondents"],
+            "source": qd["source"],                  # "mrp", "raw", or "mixed"
         }
     return result
 
@@ -339,6 +290,7 @@ def render_question_cards(q_df, key_prefix="qcard"):
 # ══════════════════════════════════════════════════════════════════
 
 st.title("⚡ Issue Landscape")
+data_source_badge("mrp")
 st.caption(
     "Each dot is a reform topic. Upper-right (Golden Zone) = broad bipartisan support. "
     "Hover any dot for details. Switch views in the sidebar for ranked lists and consensus gauges."

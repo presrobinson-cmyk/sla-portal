@@ -15,7 +15,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from theme import (
-    apply_theme, portal_footer, get_supabase_config, get_supabase_headers,
+    apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
     CJ_SURVEYS, SURVEY_STATE, STATE_COLORS, STATE_ABBR, TIER_MAP,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
 )
@@ -28,6 +28,9 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+# Shared data loader (MrP primary, raw fallback)
+from data_loader import load_mrp_question_summary, _paginate as paginate_supabase
 
 # Human-readable construct names
 CONSTRUCT_LABELS = {
@@ -80,53 +83,103 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 
 @st.cache_data(ttl=3600, show_spinner="Loading cross-state data...")
 def load_cross_state_data():
-    """Pull all L2 responses, score at runtime, compute per-state per-topic and per-question support."""
-    all_l2 = []
-    for sid in CJ_SURVEYS:
-        rows = _paginate(
-            f"{SUPABASE_URL}/rest/v1/l2_responses"
-            f"?select=respondent_id,survey_id,question_id,question_text,response"
-            f"&survey_id=eq.{sid}",
-            HEADERS,
-        )
-        all_l2.extend(rows)
+    """Load cross-state comparison data.
+    Uses MrP-adjusted rates from mrp_question_summary when available,
+    falls back to raw L2 scoring for surveys not yet through MrP.
+    """
+    # Step 1: Load MrP data (keyed by (survey_id, question_id))
+    mrp_data, mrp_surveys = load_mrp_question_summary()
 
-    # Score and aggregate by state × topic and state × question
-    state_topic = defaultdict(lambda: defaultdict(lambda: {"fav": 0, "n": 0}))
-    state_question = defaultdict(lambda: defaultdict(lambda: {"fav": 0, "n": 0, "text": "", "construct": ""}))
-    respondent_counts = defaultdict(set)
+    # Step 2: Identify which CJ surveys need raw fallback
+    needs_raw = [sid for sid in CJ_SURVEYS if sid not in mrp_surveys]
 
-    for r in all_l2:
-        qid = r.get("question_id")
-        sid = r.get("survey_id")
-        if not qid or qid in SKIPPED_QIDS:
+    # Step 3: Load raw L2 for uncovered surveys
+    raw_state_question = defaultdict(lambda: defaultdict(lambda: {"fav": 0, "n": 0, "text": "", "construct": ""}))
+    raw_respondent_counts = defaultdict(set)
+
+    if needs_raw and SCORING_AVAILABLE:
+        for sid in needs_raw:
+            rows = paginate_supabase(
+                f"{SUPABASE_URL}/rest/v1/l2_responses"
+                f"?select=respondent_id,survey_id,question_id,question_text,response"
+                f"&survey_id=eq.{sid}",
+                HEADERS,
+            )
+            state = SURVEY_STATE.get(sid, "")
+            if not state:
+                continue
+            for r in rows:
+                qid = r.get("question_id")
+                if not qid or qid in SKIPPED_QIDS:
+                    continue
+                construct = get_construct(qid)
+                if not construct or construct in GAUGE_CONSTRUCTS:
+                    continue
+                fav, intensity, has_int = score_content(qid, r["response"], sid)
+                if fav is None:
+                    continue
+                is_fav = 1 if fav == 1 else 0
+                raw_state_question[state][qid]["fav"] += is_fav
+                raw_state_question[state][qid]["n"] += 1
+                if r.get("question_text"):
+                    raw_state_question[state][qid]["text"] = r["question_text"]
+                raw_state_question[state][qid]["construct"] = construct
+                raw_respondent_counts[state].add(r.get("respondent_id"))
+
+    # Step 4: Merge MrP + raw into unified per-state per-question data
+    # Format: {state: {qid: {pct, n, text, construct, source}}}
+    state_question_merged = defaultdict(dict)
+    respondent_counts = defaultdict(int)
+
+    # MrP data first
+    for (sid, qid), row in mrp_data.items():
+        if sid not in [s for s in CJ_SURVEYS]:
             continue
-        construct = get_construct(qid)
-        if not construct or construct in GAUGE_CONSTRUCTS:
-            continue
-
-        fav, intensity, has_int = score_content(qid, r["response"], sid)
-        if fav is None:
-            continue
-        is_fav = 1 if fav == 1 else 0
-
-        state = SURVEY_STATE.get(sid, "")
+        state = row.get("state", SURVEY_STATE.get(sid, ""))
         if not state:
             continue
+        construct = get_construct(qid) if SCORING_AVAILABLE else None
+        if not construct or construct in GAUGE_CONSTRUCTS:
+            continue
+        if qid in SKIPPED_QIDS:
+            continue
+        state_question_merged[state][qid] = {
+            "pct": row["mrp_pct"],
+            "n": row.get("n_respondents", 0),
+            "text": row.get("question_text", ""),
+            "construct": construct,
+            "source": "mrp",
+        }
+        respondent_counts[state] = max(respondent_counts[state], row.get("n_respondents", 0))
 
-        state_topic[state][construct]["fav"] += is_fav
-        state_topic[state][construct]["n"] += 1
+    # Raw fallback data
+    for state, questions in raw_state_question.items():
+        for qid, qd in questions.items():
+            if qd["n"] < 20:
+                continue
+            if qid not in state_question_merged.get(state, {}):
+                if state not in state_question_merged:
+                    state_question_merged[state] = {}
+                state_question_merged[state][qid] = {
+                    "pct": qd["fav"] / qd["n"] * 100,
+                    "n": qd["n"],
+                    "text": qd["text"],
+                    "construct": qd["construct"],
+                    "source": "raw",
+                }
+        if state in raw_respondent_counts:
+            respondent_counts[state] = max(respondent_counts[state], len(raw_respondent_counts[state]))
 
-        state_question[state][qid]["fav"] += is_fav
-        state_question[state][qid]["n"] += 1
-        if r.get("question_text"):
-            state_question[state][qid]["text"] = r["question_text"]
-        state_question[state][qid]["construct"] = construct
+    # Step 5: Build topic-level cross-state matrix
+    state_topic = defaultdict(lambda: defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0}))
+    for state, questions in state_question_merged.items():
+        for qid, qd in questions.items():
+            c = qd["construct"]
+            n = qd["n"]
+            state_topic[state][c]["sum_pct_n"] += qd["pct"] * n
+            state_topic[state][c]["sum_n"] += n
 
-        respondent_counts[state].add(r.get("respondent_id"))
-
-    # Build topic-level cross-state matrix
-    all_states = sorted(state_topic.keys())
+    all_states = sorted(state_question_merged.keys())
     all_constructs = set()
     for st_data in state_topic.values():
         all_constructs.update(st_data.keys())
@@ -137,10 +190,11 @@ def load_cross_state_data():
         states_with_data = []
         for state in all_states:
             d = state_topic[state].get(con)
-            if d and d["n"] >= 20:
+            if d and d["sum_n"] > 0:
                 abbr = STATE_ABBR.get(state, state[:2])
-                row[abbr] = d["fav"] / d["n"] * 100
-                states_with_data.append(d["fav"] / d["n"] * 100)
+                pct = d["sum_pct_n"] / d["sum_n"]
+                row[abbr] = pct
+                states_with_data.append(pct)
             else:
                 abbr = STATE_ABBR.get(state, state[:2])
                 row[abbr] = None
@@ -157,19 +211,17 @@ def load_cross_state_data():
                 row["transfer"] = "State-Specific"
             topic_matrix.append(row)
 
-    # Question-level cross-state (for questions fielded in 2+ states)
-    question_cross = defaultdict(dict)  # question_text -> {state: support%}
-    question_meta = {}  # question_text -> {construct, qid}
+    # Step 6: Question-level cross-state (for questions fielded in 2+ states)
+    question_cross = defaultdict(dict)
+    question_meta = {}
 
-    for state, questions in state_question.items():
+    for state, questions in state_question_merged.items():
         abbr = STATE_ABBR.get(state, state[:2])
         for qid, qd in questions.items():
-            if qd["n"] < 20:
-                continue
             text = qd["text"]
             if not text:
                 continue
-            question_cross[text][abbr] = qd["fav"] / qd["n"] * 100
+            question_cross[text][abbr] = qd["pct"]
             question_meta[text] = {"construct": qd["construct"], "qid": qid}
 
     multi_state_questions = []
@@ -190,7 +242,7 @@ def load_cross_state_data():
             })
     multi_state_questions.sort(key=lambda x: x["spread"])
 
-    state_counts = {s: len(rids) for s, rids in respondent_counts.items()}
+    state_counts = dict(respondent_counts)
 
     return topic_matrix, multi_state_questions, all_states, state_counts
 
@@ -200,6 +252,7 @@ def load_cross_state_data():
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🗺️ Cross-State Comparison")
+data_source_badge("mrp")
 st.markdown(
     "Compare reform polling results across states. See which messages transfer "
     "across state lines and which need local adaptation."

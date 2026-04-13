@@ -78,11 +78,12 @@ SURVEY_STATE = {
 TIER_MAP = {
     "PD_FUNDING": "Entry", "INVEST": "Entry", "LIT": "Entry",
     "COUNSEL_ACCESS": "Entry (VA)",
-    "DV": "Entry", "CAND-DV": "Bridge",
+    "DV": "Bridge", "CAND-DV": "Bridge",
+    "COMPASSION": "Bridge", "FINES": "Bridge",
     "PROP": "Downstream", "REDEMPTION": "Downstream",
     "EXPUNGE": "Downstream", "SENTREVIEW": "Downstream",
     "JUDICIAL": "Downstream", "RETRO": "Downstream",
-    "FINES": "Downstream", "MAND": "Downstream",
+    "MAND": "Downstream",
     "BAIL": "Downstream", "REENTRY": "Downstream",
     "RECORD": "Downstream", "JUV": "Downstream",
     "FAMILY": "Downstream", "ELDERLY": "Downstream",
@@ -460,5 +461,40 @@ def portal_footer():
     <div class="portal-footer">
         Second Look Alliance · Criminal Justice Reform Intelligence Portal<br>
         Research & Data Infrastructure by <strong>Actionable Intel</strong> · Confidential
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def data_source_badge(source="mrp"):
+    """
+    Render a small badge under page titles indicating data source.
+    source: "mrp" (primary — MrP-adjusted with raw fallback) or "raw" (raw only).
+    """
+    if source == "mrp":
+        badge_color = "#1B6B3A"
+        label = "MrP-Adjusted"
+        tooltip = "Support rates are MrP-adjusted (multilevel regression with poststratification). Surveys not yet through MrP fall back to raw responses."
+        # Also show a smaller note about party splits
+        party_note = (
+            f'<span title="Party breakdowns (Republican/Democrat) use raw survey data — '
+            f'party ID is not in the MrP demographic model." style="'
+            f'display:inline-block; padding:2px 8px; border-radius:10px; '
+            f'background:{NAVY2}; color:#fff; font-size:0.65rem; '
+            f'font-family:\'DM Sans\',sans-serif; margin-left:6px; cursor:help; '
+            f'opacity:0.8;">Party splits: raw</span>'
+        )
+    else:
+        badge_color = NAVY2
+        label = "Raw Survey Responses"
+        tooltip = "These numbers come directly from survey responses — no MrP modeling applied."
+        party_note = ""
+    st.markdown(f"""
+    <div style="margin:-0.5rem 0 1rem 0;">
+        <span title="{tooltip}" style="
+            display:inline-block; padding:3px 10px; border-radius:12px;
+            background:{badge_color}; color:#fff; font-size:0.72rem;
+            font-family:'DM Sans',sans-serif; letter-spacing:0.3px;
+            cursor:help;
+        ">{label}</span>{party_note}
     </div>
     """, unsafe_allow_html=True)
