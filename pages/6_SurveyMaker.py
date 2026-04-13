@@ -995,67 +995,334 @@ else:
     """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────
-# SURVEY ASSEMBLY PANEL
+# SURVEY BUILDER — live preview + Word export
 # ─────────────────────────────────────────────────────────────────
 
 st.divider()
+st.markdown("### 📋 Survey Builder")
+st.caption(
+    "Pick policy questions from the library. The behavioral and demographic batteries are always included as standard structure. "
+    "Preview your complete survey below, then export to Word."
+)
 
-st.markdown("### Survey Assembly")
+# ── Scale detection ──────────────────────────────────────────────
 
-n_strong = len(questions_df[questions_df['overall_support'] >= 75])
-n_moderate = len(questions_df[(questions_df['overall_support'] >= 55) & (questions_df['overall_support'] < 75)])
-n_contested = len(questions_df[questions_df['overall_support'] < 55])
+def _get_scale(text, construct=""):
+    """Assign a response scale from question text."""
+    t = text.lower()
+    if any(w in t for w in [
+        "have you", "did you", "in the past", "do you personally know",
+        "have you ever", "served on a jury", "know someone", "been arrested",
+        "been incarcerated", "contacted an", "shared a news", "attended a",
+        "do you know someone",
+    ]):
+        return "yes_no"
+    if any(w in t for w in ["how often", "how frequently", "how regularly", "how likely are you to share"]):
+        return "frequency"
+    if any(w in t for w in ["how important", "how much of a priority"]):
+        return "importance"
+    if any(w in t for w in ["do you agree", "strongly agree", "believe that"]):
+        return "agree_5"
+    return "support_5"
+
+SCALE_LABELS = {
+    "support_5": [
+        "Strongly Support", "Somewhat Support",
+        "Neither Support nor Oppose", "Somewhat Oppose", "Strongly Oppose",
+    ],
+    "agree_5": [
+        "Strongly Agree", "Somewhat Agree",
+        "Neither Agree nor Disagree", "Somewhat Disagree", "Strongly Disagree",
+    ],
+    "yes_no": ["Yes", "No", "Not sure / Prefer not to answer"],
+    "frequency": [
+        "Never", "Rarely (once or twice)",
+        "Sometimes", "Often", "Very often / regularly",
+    ],
+    "importance": [
+        "Extremely important", "Very important",
+        "Somewhat important", "Not very important", "Not at all important",
+    ],
+}
+
+BEHAVIORAL_BATTERY = [
+    {"code": "B1", "text": "In the past 12 months, have you discussed criminal justice issues with someone outside your household?", "scale": "yes_no"},
+    {"code": "B2", "text": "Have you or an immediate family member ever been arrested, charged with a crime, or incarcerated?", "scale": "yes_no"},
+    {"code": "B3", "text": "In the past year, have you written, called, or emailed an elected official about any issue?", "scale": "yes_no"},
+    {"code": "B4", "text": "In the past year, have you shared a news article or social media post about criminal justice or policing?", "scale": "yes_no"},
+    {"code": "B5", "text": "In the past year, have you attended a town hall, community meeting, rally, or organized event?", "scale": "yes_no"},
+    {"code": "B6", "text": "Do you personally know someone who is currently incarcerated?", "scale": "yes_no"},
+    {"code": "B7", "text": "Have you ever served on a jury?", "scale": "yes_no"},
+    {"code": "B8", "text": "If you read a compelling news story about criminal justice reform, how likely are you to share it with someone?", "scale": "frequency"},
+]
+
+DEMOGRAPHIC_BATTERY = [
+    {"code": "D1", "text": "What is your age?", "scale": "open_age"},
+    {"code": "D2", "text": "What is your gender?", "scale": "gender"},
+    {"code": "D3", "text": "What is your race or ethnicity? (Select all that apply)", "scale": "race"},
+    {"code": "D4", "text": "What is the highest level of education you have completed?", "scale": "education"},
+    {"code": "D5", "text": "What is your approximate annual household income?", "scale": "income"},
+    {"code": "D6", "text": "What is your political party registration or affiliation?", "scale": "party"},
+    {"code": "D7", "text": "In general, how would you describe your political views?", "scale": "ideology"},
+    {"code": "D8", "text": "How would you describe the area where you live?", "scale": "area_type"},
+    {"code": "D9", "text": "In which state do you currently reside?", "scale": "state"},
+]
+
+DEMO_SCALE_LABELS = {
+    "open_age": ["18–24", "25–34", "35–44", "45–54", "55–64", "65 or older"],
+    "gender": ["Man", "Woman", "Non-binary / Gender non-conforming", "Prefer not to answer"],
+    "race": ["White / Caucasian", "Black / African American", "Hispanic / Latino", "Asian / Pacific Islander", "Native American / Alaska Native", "Two or more races", "Other / Prefer not to answer"],
+    "education": ["Less than high school", "High school diploma or GED", "Some college, no degree", "Associate's degree", "Bachelor's degree", "Graduate or professional degree"],
+    "income": ["Under $25,000", "$25,000–$49,999", "$50,000–$74,999", "$75,000–$99,999", "$100,000–$149,999", "$150,000 or more", "Prefer not to answer"],
+    "party": ["Republican", "Democrat", "Independent", "Other / Third party", "Not registered / No preference"],
+    "ideology": ["Very conservative", "Somewhat conservative", "Moderate", "Somewhat liberal", "Very liberal"],
+    "area_type": ["Urban (large city)", "Suburban (near a city)", "Small town", "Rural"],
+    "state": ["Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"],
+}
+
+# ── Survey name input ────────────────────────────────────────────
+
+sb_col1, sb_col2 = st.columns([3, 1])
+with sb_col1:
+    survey_name = st.text_input(
+        "Survey title",
+        value="SLA Survey — [State] [Month Year]",
+        key="sb_survey_name",
+        placeholder="e.g. SLA Texas Survey — May 2026",
+    )
+
+# ── Policy question picker ───────────────────────────────────────
 
 st.markdown(f"""
-Question bank includes **{len(questions_df)} scored questions** across **{questions_df['topic_label'].nunique()} topics**.
-""")
+<div style="font-weight:700;color:{NAVY};margin:1rem 0 0.25rem;font-size:0.95rem;">Add Policy Questions from the Library</div>
+<div style="font-size:0.82rem;color:{TEXT3};margin-bottom:0.5rem;">
+    Type to search by topic or keyword. Questions are sorted with highest support first.
+    Support % shown for reference — select based on your strategic needs, not just popularity.
+</div>
+""", unsafe_allow_html=True)
 
-asm_c1, asm_c2, asm_c3, asm_c4 = st.columns(4)
-asm_c1.metric("Total Questions", len(questions_df))
-asm_c2.metric("Strong Consensus (75%+)", n_strong)
-asm_c3.metric("Moderate (55-74%)", n_moderate)
-asm_c4.metric("Contested (<55%)", n_contested)
+# Build picker options
+q_options_list = []
+q_options_map = {}
+for _, row in questions_df.sort_values(['tier', 'overall_support'], ascending=[True, False]).iterrows():
+    pct = round(row['overall_support']) if row['overall_support'] is not None else 0
+    tier_short = {"Entry": "Entry", "Entry (VA)": "Entry", "Bridge": "Bridge",
+                  "Downstream": "Downstream", "Destination": "Destination"}.get(row['tier'], row['tier'])
+    label = f"[{tier_short}] {row['topic_label']} — {row['text'][:90]}{'…' if len(row['text']) > 90 else ''} · {pct}%"
+    q_options_list.append(label)
+    q_options_map[label] = row.to_dict()
 
-# ── MINIMUM-QUESTION THRESHOLD WARNING ──
+selected_labels = st.multiselect(
+    "Search and select policy questions",
+    options=q_options_list,
+    default=st.session_state.get("sb_selected_qs_saved", []),
+    key="sb_selected_qs",
+    placeholder="Type a topic, keyword, or construct name…",
+    label_visibility="collapsed",
+)
+st.session_state["sb_selected_qs_saved"] = selected_labels
+selected_policy_qs = [q_options_map[label] for label in selected_labels]
+
+# ── Live preview ─────────────────────────────────────────────────
+
 st.markdown("")
+q_counter = [1]  # mutable counter
 
-# Constructs in current filtered selection — check per-construct Qs
-if not filtered_df.empty:
-    filtered_construct_counts = filtered_df.groupby('construct').size()
-    thin_in_filter = filtered_construct_counts[filtered_construct_counts < 3]
+def preview_question(text, scale_labels, note=""):
+    """Render one question card in the preview."""
+    num = q_counter[0]
+    q_counter[0] += 1
+    opts_html = "".join(
+        f'<div style="font-size:0.82rem;color:{TEXT2};padding:2px 0 2px 1.4rem;">◯ &nbsp;{opt}</div>'
+        for opt in scale_labels
+    )
+    note_html = f'<div style="font-size:0.7rem;color:{TEXT3};margin-top:3px;padding-left:1.4rem;">{note}</div>' if note else ""
+    st.markdown(f"""
+<div style="margin-bottom:0.9rem;padding:0.6rem 0.85rem;background:rgba(255,255,255,0.5);
+     border-radius:8px;border:1px solid {BORDER2};">
+    <div style="font-size:0.9rem;color:{TEXT1};line-height:1.5;margin-bottom:0.35rem;">
+        <strong style="color:{NAVY};">{num}.</strong> {text}
+    </div>
+    {opts_html}
+    {note_html}
+</div>
+""", unsafe_allow_html=True)
 
-    if not thin_in_filter.empty:
-        thin_labels = [
-            f"{CONSTRUCT_LABELS.get(c, c)} ({n} Q{'s' if n!=1 else ''})"
-            for c, n in thin_in_filter.items()
-        ]
-        st.markdown(f"""
-        <div style="background:rgba(139,26,26,0.07);border:1px solid rgba(139,26,26,0.3);
-             border-radius:10px;padding:1rem 1.25rem;margin-bottom:0.75rem;">
-            <div style="font-weight:700;color:#8B1A1A;margin-bottom:0.4rem;font-size:0.92rem;">
-                ⚠️ Minimum-Question Threshold Warning
-            </div>
-            <div style="font-size:0.85rem;color:{TEXT2};line-height:1.5;">
-                Your current filter includes constructs with fewer than 3 questions. MrP estimates
-                for these constructs are unreliable — the LA-CJ-2025-002 diagnosis showed that r=0.12
-                was not a bug but thin construct coverage in an omnibus survey.
-            </div>
-            <div style="margin-top:0.5rem;font-size:0.82rem;color:#8B1A1A;font-weight:600;">
-                Thin constructs: {" · ".join(thin_labels)}
-            </div>
-            <div style="font-size:0.8rem;color:{TEXT3};margin-top:0.3rem;">
-                Recommendation: add at least 3 questions per construct before fielding.
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        st.success(
-            f"✅ All {filtered_construct_counts.shape[0]} constructs in your current selection "
-            "have 3+ questions — above the minimum threshold for reliable MrP estimates.",
-            icon=None,
+def section_header(label):
+    st.markdown(f"""
+<div style="font-size:0.82rem;font-weight:700;color:{NAVY};text-transform:uppercase;
+     letter-spacing:0.07em;margin:1.25rem 0 0.6rem;padding:0.4rem 0.75rem;
+     border-left:4px solid {GOLD};background:rgba(196,153,58,0.06);border-radius:0 6px 6px 0;">
+    {label}
+</div>
+""", unsafe_allow_html=True)
+
+# Preview container
+st.markdown(f"""
+<div style="background:{CARD_BG};border:2px solid {BORDER2};border-radius:14px;
+     padding:1.5rem 1.75rem;margin-top:0.25rem;">
+<div style="font-family:serif;font-size:1.35rem;font-weight:700;color:{NAVY};
+     border-bottom:2px solid {GOLD};padding-bottom:0.5rem;margin-bottom:1.25rem;">
+    {survey_name}
+</div>
+<div style="font-size:0.8rem;color:{TEXT3};margin-bottom:1.25rem;">
+    Confidential — Actionable Intel / Second Look Alliance · <em>Draft — not for distribution</em>
+</div>
+""", unsafe_allow_html=True)
+
+section_header("Section A — Your Background and Experience")
+for q in BEHAVIORAL_BATTERY:
+    preview_question(q["text"], SCALE_LABELS.get(q["scale"], ["Yes", "No"]))
+
+if selected_policy_qs:
+    section_header("Section B — Policy Questions")
+    for q in selected_policy_qs:
+        scale_type = _get_scale(q["text"], q.get("construct", ""))
+        pct = round(q["overall_support"]) if q.get("overall_support") is not None else 0
+        note = f"{q['topic_label']} · {pct}% support in library"
+        preview_question(q["text"], SCALE_LABELS.get(scale_type, SCALE_LABELS["support_5"]), note=note)
+else:
+    st.markdown(f"""
+<div style="font-size:0.85rem;color:{TEXT3};font-style:italic;margin:0.75rem 0 1rem;
+     padding:0.75rem 1rem;border:1px dashed {BORDER2};border-radius:8px;text-align:center;">
+    Use the question picker above to add policy questions — they'll appear here in order.
+</div>
+""", unsafe_allow_html=True)
+
+section_header("Section C — About You")
+for q in DEMOGRAPHIC_BATTERY:
+    preview_question(q["text"], DEMO_SCALE_LABELS.get(q["scale"], []))
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ── Export ───────────────────────────────────────────────────────
+
+total_qs = len(BEHAVIORAL_BATTERY) + len(selected_policy_qs) + len(DEMOGRAPHIC_BATTERY)
+est_minutes = round(total_qs * 0.75)
+
+st.markdown("")
+export_col1, export_col2 = st.columns([3, 2])
+
+with export_col1:
+    st.markdown(f"""
+<div style="font-size:0.84rem;color:{TEXT2};padding:0.5rem 0;">
+    <strong>{total_qs} questions total</strong> &nbsp;·&nbsp;
+    {len(BEHAVIORAL_BATTERY)} behavioral &nbsp;·&nbsp;
+    {len(selected_policy_qs)} policy &nbsp;·&nbsp;
+    {len(DEMOGRAPHIC_BATTERY)} demographic
+    &nbsp;·&nbsp; Estimated completion: ~{est_minutes} min
+</div>
+""", unsafe_allow_html=True)
+
+with export_col2:
+    try:
+        from docx import Document as _DocxDocument
+        _DOCX_OK = True
+    except ImportError:
+        _DOCX_OK = False
+
+    if _DOCX_OK:
+        def _build_survey_docx(s_name, b_qs, p_qs, d_qs):
+            import io
+            from docx import Document
+            from docx.shared import Pt, RGBColor, Inches
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+            doc = Document()
+            # Margins
+            for section in doc.sections:
+                section.top_margin = Inches(1)
+                section.bottom_margin = Inches(1)
+                section.left_margin = Inches(1.2)
+                section.right_margin = Inches(1.2)
+
+            # Title
+            title_para = doc.add_heading(s_name, level=1)
+            title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            for run in title_para.runs:
+                run.font.color.rgb = RGBColor(0x0E, 0x1F, 0x3D)
+                run.font.size = Pt(18)
+
+            sub = doc.add_paragraph("Confidential — Actionable Intel / Second Look Alliance")
+            sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            sub.runs[0].font.color.rgb = RGBColor(0x8B, 0x8F, 0xA3)
+            sub.runs[0].font.size = Pt(10)
+            doc.add_paragraph()
+
+            def add_section_header(text):
+                p = doc.add_paragraph()
+                run = p.add_run(text.upper())
+                run.bold = True
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(0x0E, 0x1F, 0x3D)
+                run.font.all_caps = True
+                p.paragraph_format.space_before = Pt(14)
+                p.paragraph_format.space_after = Pt(4)
+                # Gold underline via border on paragraph would require XML hack; skip for now
+                return p
+
+            q_n = [1]
+            def add_q(text, options, note=""):
+                q_para = doc.add_paragraph()
+                num_run = q_para.add_run(f"{q_n[0]}. ")
+                num_run.bold = True
+                num_run.font.size = Pt(11)
+                text_run = q_para.add_run(text)
+                text_run.font.size = Pt(11)
+                q_para.paragraph_format.space_after = Pt(2)
+                for opt in options:
+                    opt_para = doc.add_paragraph()
+                    opt_para.add_run(f"  ○  {opt}")
+                    opt_para.paragraph_format.left_indent = Inches(0.3)
+                    opt_para.paragraph_format.space_after = Pt(1)
+                    opt_para.runs[0].font.size = Pt(10)
+                    opt_para.runs[0].font.color.rgb = RGBColor(0x4A, 0x4A, 0x42)
+                if note:
+                    note_para = doc.add_paragraph()
+                    note_para.add_run(note)
+                    note_para.paragraph_format.left_indent = Inches(0.3)
+                    note_para.runs[0].font.size = Pt(8)
+                    note_para.runs[0].font.color.rgb = RGBColor(0xAA, 0xAA, 0xAA)
+                doc.add_paragraph()
+                q_n[0] += 1
+
+            add_section_header("Section A — Your Background and Experience")
+            for q in b_qs:
+                add_q(q["text"], SCALE_LABELS.get(q["scale"], ["Yes", "No"]))
+
+            if p_qs:
+                add_section_header("Section B — Policy Questions")
+                for q in p_qs:
+                    stype = _get_scale(q["text"], q.get("construct", ""))
+                    pct = round(q["overall_support"]) if q.get("overall_support") is not None else 0
+                    add_q(
+                        q["text"],
+                        SCALE_LABELS.get(stype, SCALE_LABELS["support_5"]),
+                        note=f"{q['topic_label']} · {pct}% support",
+                    )
+
+            add_section_header("Section C — About You")
+            for q in d_qs:
+                add_q(q["text"], DEMO_SCALE_LABELS.get(q["scale"], []))
+
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+            return buf
+
+        docx_data = _build_survey_docx(survey_name, BEHAVIORAL_BATTERY, selected_policy_qs, DEMOGRAPHIC_BATTERY)
+        safe_fname = "".join(c if c.isalnum() or c in " _-" else "" for c in survey_name)[:50].strip() or "SLA_Survey"
+        safe_fname = safe_fname.replace(" ", "_")
+        st.download_button(
+            label="📄 Download Survey (.docx)",
+            data=docx_data,
+            file_name=f"{safe_fname}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True,
+            type="primary",
         )
-
-st.info("Full survey assembly tools (export, skip logic, randomization) coming in next update.")
+    else:
+        st.warning("python-docx not installed. Run: `pip install python-docx`")
 
 # ─────────────────────────────────────────────────────────────────
 # METHODOLOGY GUIDANCE

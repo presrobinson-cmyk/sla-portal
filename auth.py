@@ -91,6 +91,48 @@ def login_screen(app_name: str = "Actionable Intel", accent_color: str = "#3b82f
             font-size: 0.75rem;
             margin-top: 1.5rem;
         }}
+        /* Override Streamlit's default dark input fields */
+        .stTextInput > div > div > input {{
+            background-color: #ffffff !important;
+            color: #1a1a2e !important;
+            border: 1.5px solid #d1d5db !important;
+            border-radius: 8px !important;
+            padding: 0.55rem 0.8rem !important;
+            font-size: 0.95rem !important;
+        }}
+        .stTextInput > div > div > input:focus {{
+            border-color: #C4993A !important;
+            box-shadow: 0 0 0 3px rgba(196, 153, 58, 0.18) !important;
+            outline: none !important;
+        }}
+        .stTextInput > div > div > input::placeholder {{
+            color: #9ca3af !important;
+        }}
+        /* Input labels */
+        .stTextInput label {{
+            color: #4A4A42 !important;
+            font-size: 0.85rem !important;
+            font-weight: 600 !important;
+        }}
+        /* Show/hide password toggle icon */
+        .stTextInput > div > div > div[data-testid="InputInstructions"] {{
+            display: none;
+        }}
+        /* Sign in button */
+        .stFormSubmitButton > button {{
+            background-color: #C4993A !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 700 !important;
+            font-size: 1rem !important;
+            padding: 0.65rem 1rem !important;
+            letter-spacing: 0.02em !important;
+            transition: background 0.15s ease !important;
+        }}
+        .stFormSubmitButton > button:hover {{
+            background-color: #b8870a !important;
+        }}
         /* Hide the default Streamlit menu and footer on login page */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
