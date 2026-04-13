@@ -176,14 +176,41 @@ st.markdown(f"<div style='text-align:center;font-size:0.8rem;color:{TEXT3};margi
 
 st.divider()
 
-# ── Navigation Grid ──
+# ── Navigation Grid — clickable cards ──
+# Streamlit buttons styled as cards via injected CSS.
+# Each card IS the button — no separate link below.
+
 st.markdown("### Quick Access")
+
+# Inject CSS to make buttons look like cards
+st.markdown(f"""
+<style>
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button.nav-card-btn {{
+    background: {CARD_BG};
+    border: 1px solid {BORDER2};
+    border-radius: 10px;
+    padding: 1.25rem;
+    min-height: 160px;
+    text-align: left;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    transition: border-color 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    cursor: pointer;
+}}
+div[data-testid="stVerticalBlock"] div[data-testid="stButton"] > button.nav-card-btn:hover {{
+    border-color: {GOLD};
+    box-shadow: 0 2px 8px rgba(212,168,67,0.2);
+}}
+</style>
+""", unsafe_allow_html=True)
 
 nav_items = [
     {
         "title": "Issue Landscape",
         "icon": "⚡",
-        "description": "See which issues have the broadest public support and strongest cross-party appeal. Find Golden Zone winners.",
+        "description": "Which issues have the broadest support and strongest cross-party appeal. Find Golden Zone winners.",
         "page": "pages/1_Issue_Landscape.py",
     },
     {
@@ -201,13 +228,13 @@ nav_items = [
     {
         "title": "Cross-State",
         "icon": "🗺️",
-        "description": "Compare support levels across states. See which messages transfer and which need local adaptation.",
+        "description": "Compare support levels across states. See which messages transfer and need local adaptation.",
         "page": "pages/4_Cross_State.py",
     },
     {
         "title": "MediaMaker",
         "icon": "📢",
-        "description": "Golden Zone issue → audience targeting specs + AI-generated message scripts. Channel recommendations.",
+        "description": "Golden Zone issue → audience targeting specs + AI-generated message scripts.",
         "page": "pages/5_MediaMaker.py",
     },
     {
@@ -218,60 +245,19 @@ nav_items = [
     },
 ]
 
-cols = st.columns(3)
+# Render cards in 3-column grid — the button IS the card
+row1 = st.columns(3)
+row2 = st.columns(3)
+all_cols = row1 + row2
+
 for idx, item in enumerate(nav_items):
-    with cols[idx % 3]:
-        st.markdown(f"""
-        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;
-             padding:1.25rem;margin-bottom:0.5rem;min-height:140px;
-             box-shadow:0 1px 3px rgba(0,0,0,0.04);">
-            <div style="font-size:1.8rem;margin-bottom:0.5rem;">{item['icon']}</div>
-            <div style="font-weight:700;color:{NAVY};font-size:1rem;margin-bottom:0.4rem;">{item['title']}</div>
-            <div style="font-size:0.82rem;color:{TEXT3};line-height:1.45;">{item['description']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        if st.button(f"Open {item['title']}", key=f"nav_{idx}", use_container_width=True):
+    with all_cols[idx]:
+        if st.button(
+            f"{item['icon']}  **{item['title']}**\n\n{item['description']}",
+            key=f"nav_{idx}",
+            use_container_width=True,
+        ):
             st.switch_page(item["page"])
-
-st.divider()
-
-# ── Data Overview ──
-st.markdown("### Data Overview")
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("**States & Coverage**")
-    import pandas as pd
-    state_rows = []
-    for state in stats["states_live"]:
-        n = stats["state_counts"].get(state, 0)
-        abbr = STATE_ABBR.get(state, "")
-        surveys = len([sid for sid, s in SURVEY_STATE.items() if s == state])
-        state_rows.append({"State": state, "Abbr": abbr, "Respondents": n, "Surveys": surveys})
-    for state in stats["states_pending"]:
-        state_rows.append({"State": state, "Abbr": STATE_ABBR.get(state, ""), "Respondents": 0, "Surveys": 0})
-    if state_rows:
-        df = pd.DataFrame(state_rows)
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-with col2:
-    st.markdown("**Portal Modules**")
-    modules = [
-        ("Issue Landscape", "Overall support vs. cross-party appeal for every question", "Live"),
-        ("Voter Segments", "How different voter groups respond — by party, age, race", "Live"),
-        ("Persuasion Pathways", "Which issues open doors, build coalitions, close deals", "Live"),
-        ("Cross-State", "Support comparison across states, message transferability", "Live"),
-        ("MediaMaker", "AI-generated scripts, channel targeting", "Coming Soon"),
-        ("SurveyMaker", "Question bank, AI rewriter, survey export", "Coming Soon"),
-    ]
-    for name, desc, status in modules:
-        color = "#1B6B3A" if status == "Live" else GOLD if status == "Framework" else TEXT3
-        st.markdown(f'<div style="padding:6px 0;border-bottom:1px solid {BORDER2};">'
-                    f'<strong style="color:{NAVY};">{name}</strong> '
-                    f'<span style="font-size:0.7rem;padding:1px 8px;border-radius:8px;'
-                    f'background:{color}18;color:{color};font-weight:500;">{status}</span>'
-                    f'<br><span style="font-size:0.82rem;color:{TEXT3};">{desc}</span></div>',
-                    unsafe_allow_html=True)
 
 # ── Footer ──
 portal_footer()
