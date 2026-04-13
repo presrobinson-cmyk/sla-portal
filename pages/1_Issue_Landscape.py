@@ -41,12 +41,13 @@ from data_loader import load_question_data_hybrid, load_party_splits, render_dat
 
 # New loaders added in Session 5 — defensive import so old deploys don't crash
 try:
-    from data_loader import load_demo_splits, load_mrp_question_summary
+    from data_loader import load_demo_splits, load_mrp_question_summary, load_respondent_level_data
     DEMO_SPLITS_AVAILABLE = True
 except ImportError:
     DEMO_SPLITS_AVAILABLE = False
     def load_demo_splits(*a, **kw): return {}
     def load_mrp_question_summary(*a, **kw): return {}, set()
+    def load_respondent_level_data(*a, **kw): return {}, []
 
 st.set_page_config(
     page_title="Issue Landscape — SLA Portal",
@@ -187,6 +188,37 @@ DEMO_SUBGROUPS = {
     "Suburban":             "suburban",
     "Rural":                "rural",
 }
+
+
+def compute_intersection_support(demo_lookup, scored_responses, group_keys):
+    """
+    Compute per-QID support for respondents matching ALL of group_keys.
+    Used when multiple demographic filters are selected simultaneously
+    (e.g. Republicans + Women = respondents who are both).
+
+    Returns dict[qid → support_pct | None]
+    Groups with fewer than 10 matching respondents return None.
+    """
+    from collections import defaultdict as _dd
+    group_set = frozenset(group_keys)
+    # Respondents in the intersection of ALL selected groups
+    selected_rids = {
+        rid for rid, groups in demo_lookup.items()
+        if group_set.issubset(groups)
+    }
+    if not selected_rids:
+        return {}
+    tallies = _dd(lambda: {"f": 0, "n": 0})
+    for row in scored_responses:
+        if row["respondent_id"] not in selected_rids:
+            continue
+        tallies[row["qid"]]["n"] += 1
+        if row["fav"] == 1:
+            tallies[row["qid"]]["f"] += 1
+    return {
+        qid: (t["f"] / t["n"] * 100) if t["n"] >= 10 else None
+        for qid, t in tallies.items()
+    }
 
 
 def load_question_data(mode="mrp", subgroup_key="r"):
@@ -448,21 +480,15 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
     st.stop()
 
-# ── Demographic subgroup selection (before data load) ──
-with st.sidebar:
-    st.markdown("### Comparison Subgroup")
-    subgroup_label = st.selectbox(
-        "X axis — support among:",
-        list(DEMO_SUBGROUPS.keys()),
-        index=0,
-        key="il_subgroup",
-        help="The scatter X axis shows this group's support rate. "
-             "Useful for finding topics with strong reach into a specific audience.",
-    )
-subgroup_key = DEMO_SUBGROUPS[subgroup_label]
+# ── Subgroup selection — session_state drives data load, multiselect lives above chart ──
+# Default to Republicans on first load; multiselect widget (in scatter view) updates this
+if "il_subgroups" not in st.session_state:
+    st.session_state["il_subgroups"] = ["Republicans"]
+_sel = st.session_state.get("il_subgroups") or ["Republicans"]
+_primary_key = DEMO_SUBGROUPS.get(_sel[0], "r")
 
-# Load and aggregate
-question_data = load_question_data(mode=data_mode, subgroup_key=subgroup_key)
+# Load and aggregate using primary (first selected) subgroup
+question_data = load_question_data(mode=data_mode, subgroup_key=_primary_key)
 topics = aggregate_to_topics(question_data)
 
 if not topics:
@@ -710,6 +736,64 @@ if view_mode == "Consensus Gauge":
 # ══════════════════════════════════════════════════════════════════
 
 elif view_mode == "Scatter":
+    # ── Inline multiselect — directly above chart ──
+    sel_labels = st.multiselect(
+        "Compare support among:",
+        list(DEMO_SUBGROUPS.keys()),
+        key="il_subgroups",
+        placeholder="Choose one or more groups...",
+        help=(
+            "Pick any group to set the X axis. "
+            "**Select multiple** to see the intersection — e.g. Republicans + Women "
+            "shows support among respondents who are both."
+        ),
+    )
+    if not sel_labels:
+        sel_labels = ["Republicans"]
+        st.session_state["il_subgroups"] = sel_labels
+    sel_keys = [DEMO_SUBGROUPS[l] for l in sel_labels]
+    subgroup_label = " × ".join(sel_labels)
+
+    # ── Multi-group intersection: patch filtered df ──
+    if len(sel_keys) > 1 and DEMO_SPLITS_AVAILABLE:
+        try:
+            _demo_raw, _scored = load_respondent_level_data()
+            _inter_q = compute_intersection_support(_demo_raw, _scored, sel_keys)
+            # Re-compute topic-level skeptic_support from per-QID intersection rates
+            filtered = filtered.copy()
+            _new_sk = []
+            for _, _row in filtered.iterrows():
+                _qids = [q["qid"] for q in (_row.get("questions") or [])]
+                _rates = [_inter_q[q] for q in _qids if q in _inter_q and _inter_q[q] is not None]
+                _new_sk.append(float(np.mean(_rates)) if _rates else None)
+            filtered["skeptic_support"] = _new_sk
+            # Re-assign quadrants (intersection changes who's where)
+            def _assign_quad(r):
+                sk, ov = r["skeptic_support"], r["overall_support"]
+                if sk is None: return "Low Support"
+                if ov >= 60 and sk >= 60: return "Golden Zone"
+                if ov >= 60: return "Base Only"
+                if sk >= 60: return "Persuasion Target"
+                return "Low Support"
+            filtered["quadrant"] = filtered.apply(_assign_quad, axis=1)
+            filtered = filtered[filtered["quadrant"].isin(active_quads)]
+        except Exception:
+            pass  # Fall back to primary single-group data on any error
+    elif len(sel_keys) == 1 and sel_keys[0] != _primary_key:
+        # Single group changed — trigger reload on next render
+        st.session_state["il_subgroups"] = sel_labels
+        st.rerun()
+
+    # Drop rows that have no subgroup data after intersection
+    filtered = filtered.dropna(subset=["skeptic_support"])
+    if filtered.empty:
+        st.info(
+            f"No topics have enough data for **{subgroup_label}** "
+            f"({len(sel_labels)}-way intersection may be too narrow). "
+            "Try fewer or broader groups."
+        )
+        st.stop()
+
     st.markdown("## Scatter Plot")
     st.caption(
         f"Each dot is a reform topic. "

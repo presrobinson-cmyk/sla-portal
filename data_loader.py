@@ -524,6 +524,163 @@ def load_demo_splits(survey_ids=None):
 
 
 # ══════════════════════════════════════════════════════════════════
+# RESPONDENT-LEVEL DATA (for multi-group intersection queries)
+# ══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=604800, show_spinner="Loading respondent-level data...")
+def load_respondent_level_data(survey_ids=None):
+    """
+    Return raw respondent→group membership and pre-scored responses.
+    Used by the scatter view to compute intersection support for any
+    combination of demographic groups (e.g. 'Republican Women').
+
+    Returns:
+        demo_lookup  : dict[respondent_id → frozenset(group_keys)]
+        scored_responses : list[{respondent_id, qid, fav}]
+            fav = 1 (favorable), 0 (unfavorable), None (neutral)
+    """
+    import re as _re
+
+    if survey_ids is None:
+        survey_ids = CJ_SURVEYS
+    if not SCORING_AVAILABLE:
+        return {}, []
+
+    url, _ = get_supabase_config()
+    headers = get_supabase_headers()
+
+    # ── Pull L1 demographics (same group logic as load_demo_splits) ──
+    all_l1 = []
+    for sid in survey_ids:
+        try:
+            rows = _paginate(
+                f"{url}/rest/v1/l1_respondents"
+                f"?select=respondent_id,party_id,ideology,education,age_bracket,"
+                f"race_ethnicity,gender,area_type"
+                f"&survey_id=eq.{sid}",
+                headers,
+            )
+            all_l1.extend(rows)
+        except Exception:
+            continue
+
+    demo_lookup = {}
+    for d in all_l1:
+        rid = d["respondent_id"]
+        party    = (d.get("party_id") or "").lower()
+        ideology = (d.get("ideology") or "").strip().lower()
+        edu      = (d.get("education") or "").lower()
+        age      = (d.get("age_bracket") or "").lower()
+        race     = (d.get("race_ethnicity") or "").lower()
+        gender   = (d.get("gender") or "").lower()
+        area     = (d.get("area_type") or "").lower()
+
+        groups = []
+
+        # Party
+        if "republican" in party:
+            groups.append("r")
+        elif "democrat" in party:
+            groups.append("d")
+        elif "no party" in party or "independent" in party or "none" in party:
+            groups.append("ind")
+
+        # Ideology
+        if "very conservative" in ideology:
+            groups.append("very_conservative")
+        elif "conservative" in ideology:
+            groups.append("conservative")
+        elif "very liberal" in ideology:
+            groups.append("very_liberal")
+        elif "liberal" in ideology:
+            groups.append("liberal")
+        elif "moderate" in ideology:
+            groups.append("moderate")
+
+        # Race
+        is_white = "white" in race and "non" not in race and "not" not in race
+        if is_white:
+            groups.append("white")
+        elif race:
+            groups.append("non_white")
+        if "black" in race or "african" in race:
+            groups.append("black")
+        if "hispanic" in race or "latino" in race or "latina" in race:
+            groups.append("hispanic")
+
+        # Education
+        if any(x in edu for x in ["less than high", "no high", "grade", "elementary", "middle"]):
+            groups.append("hs_or_less")
+        elif "high school" in edu or edu == "hs" or "diploma" in edu or "ged" in edu or "hs / ged" in edu:
+            groups.append("hs_or_less")
+        elif "some college" in edu or "associate" in edu or "vocational" in edu or "trade" in edu:
+            groups.append("some_college")
+        elif "bachelor" in edu or "bachelor+" in edu or "4-year" in edu or "university" in edu:
+            groups.append("college_plus")
+        elif "graduate" in edu or "master" in edu or "doctoral" in edu or "phd" in edu or "professional" in edu or "post-graduate" in edu:
+            groups.append("college_plus")
+
+        # Age
+        age_nums = [int(x) for x in _re.findall(r'\d+', age)]
+        if age_nums:
+            min_age = age_nums[0]
+            if min_age < 35:
+                groups.append("m18_34")
+            elif min_age < 55:
+                groups.append("m35_54")
+            elif min_age < 65:
+                groups.append("m55_64")
+            else:
+                groups.append("m65plus")
+
+        # Gender
+        if "male" in gender and "fe" not in gender:
+            groups.append("male")
+        elif "female" in gender or "woman" in gender:
+            groups.append("female")
+
+        # Community type
+        if "suburban" in area:
+            groups.append("suburban")
+        elif "urban" in area:
+            groups.append("urban")
+        elif "rural" in area:
+            groups.append("rural")
+
+        demo_lookup[rid] = frozenset(groups)
+
+    # ── Pull and score L2 responses ──
+    all_l2 = []
+    for sid in survey_ids:
+        try:
+            rows = _paginate(
+                f"{url}/rest/v1/l2_responses"
+                f"?select=respondent_id,question_id,response,survey_id"
+                f"&survey_id=eq.{sid}",
+                headers,
+            )
+            all_l2.extend(rows)
+        except Exception:
+            continue
+
+    scored = []
+    for r in all_l2:
+        qid = r.get("question_id")
+        if not qid or qid in SKIPPED_QIDS:
+            continue
+        if not get_construct(qid):
+            continue
+        fav, _, _ = score_content(qid, r.get("response", ""), r.get("survey_id"))
+        scored.append({
+            "respondent_id": r["respondent_id"],
+            "qid": qid,
+            "fav": fav,  # 1, 0, or None (neutral — counts in denominator)
+        })
+
+    return demo_lookup, scored
+
+
+# ══════════════════════════════════════════════════════════════════
 # UNIFIED QUESTION DATA (MrP primary, raw fallback)
 # ══════════════════════════════════════════════════════════════════
 
