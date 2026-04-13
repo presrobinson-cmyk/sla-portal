@@ -106,7 +106,7 @@ CONSTRUCT_LABELS = {
     "TOUGHCRIME": "Tough on Crime Attitudes",
     "ISSUE_SALIENCE": "Issue Importance",
     "IMPACT": "Personal Impact",
-    "DETER": "Deterrence Beliefs",
+    "DETER": "Sentence Severity Deters Crime",
     "FISCAL": "Fiscal Responsibility",
     "DP_ABOLITION": "Death Penalty Abolition",
     "DP_RELIABILITY": "Death Penalty Reliability",
@@ -182,6 +182,7 @@ def load_question_data(mode="mrp", subgroup_key="r"):
             "overall_support": get_display_pct(qd, mode),
             "construct": qd["construct"],
             "text": qd["question_text"],
+            "response_label": qd.get("response_label", ""),  # Favorable response text
             "n": qd["n_respondents"],
             "source": "raw" if mode == "raw" else qd["source"],
         }
@@ -276,6 +277,7 @@ def aggregate_to_topics(question_data):
         topic_agg[construct]["questions"].append({
             "qid": qid,
             "text": qd["text"],
+            "response_label": qd.get("response_label", ""),  # Favorable response text
             "overall_support": overall_pct,
             "skeptic_support": qd["skeptic_support"],
             "n": qd["n"],
@@ -337,6 +339,7 @@ def render_question_cards(q_df, key_prefix="qcard"):
     """
     for i, (_, row) in enumerate(q_df.iterrows()):
         q_text = row.get("text", "—") or "—"
+        response_label = row.get("response_label", "") or ""
         overall = row.get("overall_support", 0) or 0
         skeptic = row.get("skeptic_support", None)
         n = row.get("n", 0)
@@ -355,6 +358,16 @@ def render_question_cards(q_df, key_prefix="qcard"):
                 f'font-weight:500;">{topic_label}</span>'
             )
 
+        # Reform-supporting response label (shown below stem so you know what the % represents)
+        response_html = ""
+        if response_label:
+            response_html = (
+                f'<div style="font-size:0.78rem;color:{TEXT2};font-style:italic;'
+                f'border-left:3px solid {GOLD};padding-left:8px;margin:4px 0 6px 0;line-height:1.4;">'
+                f'✓ {response_label}'
+                f'</div>'
+            )
+
         # Skeptic bar HTML — single-line to avoid markdown parser exiting HTML mode
         skeptic_html = ""
         if skeptic_pct:
@@ -371,9 +384,10 @@ def render_question_cards(q_df, key_prefix="qcard"):
         st.markdown(f"""
         <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;
              padding:0.85rem 1rem;margin-bottom:0.5rem;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-            <div style="font-size:0.88rem;color:{TEXT1};line-height:1.5;margin-bottom:0.5rem;">
+            <div style="font-size:0.88rem;color:{TEXT1};line-height:1.5;margin-bottom:0.35rem;">
                 {q_text}{topic_badge}
             </div>
+            {response_html}
             <div style="display:flex;align-items:center;gap:8px;">
                 <div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Overall</div>
                 <div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">
@@ -440,8 +454,14 @@ with st.sidebar:
     all_tiers = sorted(df["tier"].dropna().unique())
     tier_filter = st.selectbox("Persuasion Tier", ["All Tiers"] + all_tiers, key="il_tier")
 
-    quad_filter = st.multiselect("Category", list(QUAD_COLORS.keys()),
-                                  default=list(QUAD_COLORS.keys()), key="il_quad")
+    quad_filter = st.multiselect(
+        "Category", list(QUAD_COLORS.keys()),
+        default=[],
+        placeholder="All categories",
+        key="il_quad",
+    )
+    # Empty selection = show all quadrants (cleaner than pre-selecting all tags)
+    active_quads = quad_filter if quad_filter else list(QUAD_COLORS.keys())
 
     view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List", "MPT View"], key="il_view")
 
@@ -459,15 +479,28 @@ else:
 
 if tier_filter != "All Tiers":
     filtered = filtered[filtered["tier"] == tier_filter]
-if quad_filter:
-    filtered = filtered[filtered["quadrant"].isin(quad_filter)]
+filtered = filtered[filtered["quadrant"].isin(active_quads)]
 
 if filtered.empty:
     if view_mode == "Scatter" and df_scatter.empty:
-        st.info(
-            "Subgroup data is still loading — switch to **Consensus Gauge** or **Ranked List** "
-            "to view all topics now. The scatter will populate once demographic splits are cached."
-        )
+        _demo_loaded = st.session_state.get("_demo_rows_loaded", -1)
+        if _demo_loaded == 0:
+            st.warning(
+                "**Scatter unavailable: no respondent demographics found.**  \n"
+                "The `l1_respondents` table appears to be empty for the CJ surveys.  \n"
+                "Run the ingestion pipeline locally:\n\n"
+                "```bash\n"
+                "cd ~/My\\ Drive/Actionable\\ Intel/01_VIP_Engine/code\n"
+                "python unified_pipeline.py --survey-id LA-CJ-2025-002\n"
+                "python unified_pipeline.py --survey-id LA-CJ-2025-001\n"
+                "```\n\n"
+                "Then click **↻ Refresh** to reload."
+            )
+        else:
+            st.info(
+                "Subgroup data is still loading — switch to **Consensus Gauge** or **Ranked List** "
+                "to view all topics now. The scatter will populate once demographic splits are cached."
+            )
     else:
         st.warning("No topics match the current filters.")
     st.stop()

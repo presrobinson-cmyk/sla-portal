@@ -526,6 +526,7 @@ def load_question_data_hybrid(survey_ids=None):
                 "source": "mrp",
                 "construct": construct,
                 "question_text": row.get("question_text", ""),
+                "response_label": row.get("response_label", ""),  # Favorable response text
                 "n_respondents": row.get("n_respondents", 0),
             }
 
@@ -556,6 +557,7 @@ def load_question_data_hybrid(survey_ids=None):
                     "source": "raw",
                     "construct": rd["construct"],
                     "question_text": rd["question_text"],
+                    "response_label": "",  # Not available for raw-only fallback
                     "n_respondents": rd["n_respondents"],
                 }
 
