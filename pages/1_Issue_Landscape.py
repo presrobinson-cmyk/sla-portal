@@ -146,7 +146,10 @@ def load_question_data_cached():
     Returns (question_data dict, demo_data dict, mrp_coverage dict).
     """
     question_data, mrp_coverage = load_question_data_hybrid()
-    demo_data = load_demo_splits()
+    try:
+        demo_data = load_demo_splits()
+    except Exception:
+        demo_data = {}  # Demographic splits unavailable — page still loads
     return question_data, demo_data, mrp_coverage
 
 

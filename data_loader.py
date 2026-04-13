@@ -302,13 +302,16 @@ def load_demo_splits(survey_ids=None):
     # Pull all L1 demographic columns at once
     all_l1 = []
     for sid in survey_ids:
-        rows = _paginate(
-            f"{url}/rest/v1/l1_respondents"
-            f"?select=respondent_id,party_id,education,age,gender"
-            f"&survey_id=eq.{sid}",
-            headers,
-        )
-        all_l1.extend(rows)
+        try:
+            rows = _paginate(
+                f"{url}/rest/v1/l1_respondents"
+                f"?select=respondent_id,party_id,education,age,gender"
+                f"&survey_id=eq.{sid}",
+                headers,
+            )
+            all_l1.extend(rows)
+        except Exception:
+            continue  # Skip this survey; partial data is better than a full crash
 
     # Build respondent → group membership lookup
     demo_lookup = {}
@@ -357,15 +360,19 @@ def load_demo_splits(survey_ids=None):
         demo_lookup[rid] = groups
 
     # Pull L2 and score by demographic group
+    # Pull one survey at a time so a single failure doesn't wipe everything
     all_l2 = []
     for sid in survey_ids:
-        rows = _paginate(
-            f"{url}/rest/v1/l2_responses"
-            f"?select=respondent_id,question_id,response,survey_id"
-            f"&survey_id=eq.{sid}",
-            headers,
-        )
-        all_l2.extend(rows)
+        try:
+            rows = _paginate(
+                f"{url}/rest/v1/l2_responses"
+                f"?select=respondent_id,question_id,response,survey_id"
+                f"&survey_id=eq.{sid}",
+                headers,
+            )
+            all_l2.extend(rows)
+        except Exception:
+            continue  # Skip this survey; partial data is better than a full crash
 
     GROUP_KEYS = ["r", "d", "hs_or_less", "some_college", "college_plus",
                   "m18_34", "m35_54", "m55plus", "male", "female"]
