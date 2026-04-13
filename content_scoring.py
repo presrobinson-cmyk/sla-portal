@@ -1163,7 +1163,9 @@ def score_content(qid, response, survey_id=None):
         direction, intensity = classify_response_v2(response_text)
 
         if direction == "neutral":
-            return (None, None, False)
+            # Count neutrals in denominator (not favorable) so "not sure" responses
+            # don't inflate support rates. Returns (0, 0.0, False) — counted but not favorable.
+            return (0, 0.0, False)
 
         fav_side = config["favorable_side"]
 
