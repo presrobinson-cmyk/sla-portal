@@ -10,6 +10,7 @@ All portal pages should import from here instead of querying Supabase directly.
 import streamlit as st
 import requests
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from theme import (
     get_supabase_config, get_supabase_headers,
@@ -35,6 +36,10 @@ def render_data_source_toggle():
     if "data_source_mode" not in st.session_state:
         st.session_state["data_source_mode"] = "mrp"
 
+    # Record when data was first loaded this session
+    if "_data_loaded_at" not in st.session_state:
+        st.session_state["_data_loaded_at"] = datetime.now(timezone.utc)
+
     with st.sidebar:
         st.markdown("### Data Source")
         choice = st.radio(
@@ -51,6 +56,20 @@ def render_data_source_toggle():
         )
         mode = "mrp" if choice == "MrP-Adjusted" else "raw"
         st.session_state["data_source_mode"] = mode
+
+        # Cache freshness info + manual refresh
+        loaded_at = st.session_state.get("_data_loaded_at")
+        if loaded_at:
+            age = datetime.now(timezone.utc) - loaded_at
+            hours = int(age.total_seconds() // 3600)
+            mins  = int((age.total_seconds() % 3600) // 60)
+            age_str = f"{hours}h {mins}m ago" if hours else f"{mins}m ago"
+            st.caption(f"Data cached · loaded {age_str} · refreshes weekly")
+        if st.button("↻ Refresh data", key="_refresh_data_btn", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state["_data_loaded_at"] = datetime.now(timezone.utc)
+            st.rerun()
+
         st.divider()
 
     return mode
@@ -92,7 +111,7 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 # MrP QUESTION SUMMARY LOADER
 # ══════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading MrP estimates...")
+@st.cache_data(ttl=604800, show_spinner="Loading MrP estimates...")  # 1-week cache — data only changes on DB upload
 def load_mrp_question_summary(survey_ids=None):
     """
     Load mrp_question_summary rows from Supabase.
@@ -125,7 +144,7 @@ def load_mrp_question_summary(survey_ids=None):
 # RAW L2 FALLBACK LOADER (for surveys not yet in MrP)
 # ══════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading raw survey data (fallback)...")
+@st.cache_data(ttl=604800, show_spinner="Loading raw survey data (fallback)...")  # 1-week cache
 def load_raw_l2_for_surveys(survey_ids):
     """
     Load and score raw l2_responses for the given survey_ids.
@@ -188,7 +207,7 @@ def load_raw_l2_for_surveys(survey_ids):
 # PARTY-SPLIT LOADER (for scatter plot skeptic axis)
 # ══════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading party breakdowns...")
+@st.cache_data(ttl=604800, show_spinner="Loading party breakdowns...")  # 1-week cache
 def load_party_splits(survey_ids=None):
     """
     Load Republican/Democrat split from l1+l2 for given surveys.
@@ -256,10 +275,131 @@ def load_party_splits(survey_ids=None):
 
 
 # ══════════════════════════════════════════════════════════════════
+# DEMOGRAPHIC SUBGROUP SPLITS (for scatter plot X axis)
+# ══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=604800, show_spinner="Loading demographic breakdowns...")
+def load_demo_splits(survey_ids=None):
+    """
+    Load support rates split by key demographic subgroups.
+    Returns dict keyed by question_id:
+      {qid: {
+          "r": r_pct,          "d": d_pct,
+          "hs_or_less": pct,   "some_college": pct,  "college_plus": pct,
+          "m18_34": pct,       "m35_54": pct,        "m55plus": pct,
+          "male": pct,         "female": pct,
+       }}
+    Any group with < 10 respondents gets None.
+    """
+    if survey_ids is None:
+        survey_ids = CJ_SURVEYS
+    if not SCORING_AVAILABLE:
+        return {}
+
+    url, _ = get_supabase_config()
+    headers = get_supabase_headers()
+
+    # Pull all L1 demographic columns at once
+    all_l1 = []
+    for sid in survey_ids:
+        rows = _paginate(
+            f"{url}/rest/v1/l1_respondents"
+            f"?select=respondent_id,party_id,education,age,gender"
+            f"&survey_id=eq.{sid}",
+            headers,
+        )
+        all_l1.extend(rows)
+
+    # Build respondent → group membership lookup
+    demo_lookup = {}
+    for d in all_l1:
+        rid = d["respondent_id"]
+        party = (d.get("party_id") or "").lower()
+        edu   = (d.get("education") or "").lower()
+        age   = (d.get("age") or "").lower()
+        gender = (d.get("gender") or "").lower()
+
+        groups = []
+        # Party
+        if "republican" in party:
+            groups.append("r")
+        elif "democrat" in party:
+            groups.append("d")
+        # Education — map common Alchemer / L2 labels
+        if any(x in edu for x in ["less than high", "no high", "grade", "elementary", "middle"]):
+            groups.append("hs_or_less")
+        elif "high school" in edu or "hs" == edu or "diploma" in edu or "ged" in edu:
+            groups.append("hs_or_less")
+        elif "some college" in edu or "associate" in edu or "vocational" in edu or "trade" in edu:
+            groups.append("some_college")
+        elif "bachelor" in edu or "college" in edu or "4-year" in edu or "university" in edu:
+            groups.append("college_plus")
+        elif "graduate" in edu or "master" in edu or "doctoral" in edu or "phd" in edu or "professional" in edu:
+            groups.append("college_plus")
+        # Age
+        if any(x in age for x in ["18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34"]):
+            groups.append("m18_34")
+        elif "18-34" in age or "18 to 34" in age:
+            groups.append("m18_34")
+        elif any(x in age for x in ["35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54"]):
+            groups.append("m35_54")
+        elif "35-54" in age or "35 to 54" in age:
+            groups.append("m35_54")
+        elif any(x in age for x in ["55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "75", "80", "85", "older", "65+"]):
+            groups.append("m55plus")
+        elif "55+" in age or "55 and" in age or "55 or" in age:
+            groups.append("m55plus")
+        # Gender
+        if "male" in gender and "fe" not in gender:
+            groups.append("male")
+        elif "female" in gender or "woman" in gender:
+            groups.append("female")
+        demo_lookup[rid] = groups
+
+    # Pull L2 and score by demographic group
+    all_l2 = []
+    for sid in survey_ids:
+        rows = _paginate(
+            f"{url}/rest/v1/l2_responses"
+            f"?select=respondent_id,question_id,response,survey_id"
+            f"&survey_id=eq.{sid}",
+            headers,
+        )
+        all_l2.extend(rows)
+
+    GROUP_KEYS = ["r", "d", "hs_or_less", "some_college", "college_plus",
+                  "m18_34", "m35_54", "m55plus", "male", "female"]
+    q_demo = defaultdict(lambda: {k: {"f": 0, "n": 0} for k in GROUP_KEYS})
+
+    for r in all_l2:
+        qid = r.get("question_id")
+        if not qid or qid in SKIPPED_QIDS:
+            continue
+        construct = get_construct(qid)
+        if not construct:
+            continue
+        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
+        if fav is None:
+            continue
+        is_fav = 1 if fav == 1 else 0
+        for grp in demo_lookup.get(r["respondent_id"], []):
+            q_demo[qid][grp]["f"] += is_fav
+            q_demo[qid][grp]["n"] += 1
+
+    result = {}
+    for qid, groups in q_demo.items():
+        result[qid] = {
+            grp: (groups[grp]["f"] / groups[grp]["n"] * 100) if groups[grp]["n"] >= 10 else None
+            for grp in GROUP_KEYS
+        }
+    return result
+
+
+# ══════════════════════════════════════════════════════════════════
 # UNIFIED QUESTION DATA (MrP primary, raw fallback)
 # ══════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading question data...")
+@st.cache_data(ttl=604800, show_spinner="Loading question data...")  # 1-week cache
 def load_question_data_hybrid(survey_ids=None):
     """
     Load question-level support data using MrP as primary source,
@@ -367,7 +507,7 @@ def load_question_data_hybrid(survey_ids=None):
 # STATE-LEVEL QUESTION DATA (for Cross-State and State Report)
 # ══════════════════════════════════════════════════════════════════
 
-@st.cache_data(ttl=3600, show_spinner="Loading state-level data...")
+@st.cache_data(ttl=604800, show_spinner="Loading state-level data...")  # 1-week cache
 def load_state_question_data(survey_ids, state_name=None):
     """
     Load question data for specific surveys, preserving per-survey granularity.

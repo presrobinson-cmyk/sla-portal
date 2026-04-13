@@ -91,32 +91,39 @@ def login_screen(app_name: str = "Actionable Intel", accent_color: str = "#3b82f
             font-size: 0.75rem;
             margin-top: 1.5rem;
         }}
-        /* Override Streamlit's default dark input fields */
-        .stTextInput > div > div > input {{
+        /* Override Streamlit/BaseWeb dark input fields — all selector forms */
+        .stTextInput > div > div > input,
+        div[data-testid="stTextInput"] input,
+        [data-baseweb="base-input"] input,
+        [data-baseweb="input"] input {{
             background-color: #ffffff !important;
             color: #1a1a2e !important;
-            border: 1.5px solid #d1d5db !important;
-            border-radius: 8px !important;
-            padding: 0.55rem 0.8rem !important;
             font-size: 0.95rem !important;
         }}
-        .stTextInput > div > div > input:focus {{
-            border-color: #C4993A !important;
+        /* The BaseWeb wrapper div that holds the input — this is what shows the dark bg */
+        [data-baseweb="base-input"] {{
+            background-color: #ffffff !important;
+            border: 1.5px solid #d1d5db !important;
+            border-radius: 8px !important;
+        }}
+        [data-baseweb="base-input"]:focus-within {{
+            border-color: {accent_color} !important;
             box-shadow: 0 0 0 3px rgba(196, 153, 58, 0.18) !important;
+        }}
+        .stTextInput > div > div > input:focus,
+        [data-baseweb="base-input"] input:focus {{
             outline: none !important;
         }}
-        .stTextInput > div > div > input::placeholder {{
+        .stTextInput > div > div > input::placeholder,
+        [data-baseweb="base-input"] input::placeholder {{
             color: #9ca3af !important;
         }}
         /* Input labels */
-        .stTextInput label {{
+        .stTextInput label,
+        div[data-testid="stTextInput"] label {{
             color: #4A4A42 !important;
             font-size: 0.85rem !important;
             font-weight: 600 !important;
-        }}
-        /* Show/hide password toggle icon */
-        .stTextInput > div > div > div[data-testid="InputInstructions"] {{
-            display: none;
         }}
         /* Sign in button */
         .stFormSubmitButton > button {{

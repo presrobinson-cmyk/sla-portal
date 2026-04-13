@@ -37,7 +37,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_question_data_hybrid, load_party_splits, render_data_source_toggle, get_display_pct
+from data_loader import load_question_data_hybrid, load_party_splits, load_demo_splits, load_mrp_question_summary, render_data_source_toggle, get_display_pct
 
 st.set_page_config(
     page_title="Issue Landscape — SLA Portal",
@@ -130,34 +130,113 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
     return all_rows
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading survey data...")
+@st.cache_data(ttl=604800, show_spinner="Loading survey data...")
 def load_question_data_cached():
     """Load all question-level data using MrP-adjusted rates (primary)
     with raw fallback for surveys not yet in MrP.
-    Returns (question_data dict, party_data dict, mrp_coverage dict).
+    Returns (question_data dict, demo_data dict, mrp_coverage dict).
     """
     question_data, mrp_coverage = load_question_data_hybrid()
-    party_data = load_party_splits()
-    return question_data, party_data, mrp_coverage
+    demo_data = load_demo_splits()
+    return question_data, demo_data, mrp_coverage
 
 
-def load_question_data(mode="mrp"):
-    """Build display-ready question data, applying the MrP/raw toggle."""
-    question_data, party_data, mrp_coverage = load_question_data_cached()
+# Demographic subgroup options: display label → demo_splits key
+DEMO_SUBGROUPS = {
+    "Republicans":        "r",
+    "Democrats":          "d",
+    "HS or Less":         "hs_or_less",
+    "Some College":       "some_college",
+    "College Educated":   "college_plus",
+    "Ages 18-34":         "m18_34",
+    "Ages 35-54":         "m35_54",
+    "Ages 55+":           "m55plus",
+    "Men":                "male",
+    "Women":              "female",
+}
+
+
+def load_question_data(mode="mrp", subgroup_key="r"):
+    """Build display-ready question data, applying the MrP/raw toggle
+    and the selected demographic subgroup for the skeptic/X axis."""
+    question_data, demo_data, mrp_coverage = load_question_data_cached()
     st.session_state["mrp_coverage"] = mrp_coverage
 
     result = {}
     for qid, qd in question_data.items():
-        party = party_data.get(qid, {})
+        demo = demo_data.get(qid, {})
         result[qid] = {
-            "skeptic_support": party.get("r_pct"),  # Republican rate (always raw — party not in MrP cells)
-            "overall_support": get_display_pct(qd, mode),  # Respects toggle
+            "skeptic_support": demo.get(subgroup_key),  # Selected subgroup rate
+            "overall_support": get_display_pct(qd, mode),
             "construct": qd["construct"],
             "text": qd["question_text"],
             "n": qd["n_respondents"],
             "source": "raw" if mode == "raw" else qd["source"],
         }
     return result
+
+
+@st.cache_data(ttl=604800, show_spinner="Loading MPT scatter data...")
+def load_mpt_scatter_data():
+    """
+    Compute MrP Reach and Universality per construct for the MPT scatter.
+
+    Reach       = population-weighted mean MrP support across all surveyed states (0-100)
+    Universality = 100 - std_dev(per-state MrP rates)
+                 → 100 means perfectly consistent cross-state
+                 → lower means support varies heavily by state
+
+    Constructs in fewer than 2 states are excluded (universality is undefined).
+    Returns a list of dicts: {construct, topic, tier, reach, universality, n_states, n_items}
+    """
+    mrp_data, _ = load_mrp_question_summary()
+
+    # Group by (construct, state) via survey_id → SURVEY_STATE mapping
+    from collections import defaultdict
+    construct_state = defaultdict(lambda: defaultdict(list))  # {construct: {state: [mrp_pct, ...]}}
+
+    for (sid, qid), row in mrp_data.items():
+        if not SCORING_AVAILABLE:
+            continue
+        construct = get_construct(qid)
+        if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
+            continue
+        mrp_pct = row.get("mrp_pct")
+        if mrp_pct is None:
+            continue
+        # Use state column if present and populated, else derive from survey_id
+        state = row.get("state") or SURVEY_STATE.get(sid)
+        if not state:
+            continue
+        construct_state[construct][state].append(mrp_pct)
+
+    records = []
+    for construct, states in construct_state.items():
+        if len(states) < 2:
+            continue  # universality requires 2+ states
+
+        # Per-state mean (in case multiple questions per construct per state)
+        state_means = {s: np.mean(vals) for s, vals in states.items()}
+        reach = float(np.mean(list(state_means.values())))
+        std_dev = float(np.std(list(state_means.values())))
+        universality = max(0.0, 100.0 - std_dev)
+
+        tier = TIER_MAP.get(construct, "")
+        label = CONSTRUCT_LABELS.get(construct, construct)
+        n_items = sum(len(v) for v in states.values())
+
+        records.append({
+            "construct": construct,
+            "topic": label,
+            "tier": tier,
+            "reach": reach,
+            "universality": universality,
+            "n_states": len(states),
+            "n_items": n_items,
+            "state_breakdown": {s: round(v, 1) for s, v in sorted(state_means.items())},
+        })
+
+    return records
 
 
 def aggregate_to_topics(question_data):
@@ -308,8 +387,21 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
     st.stop()
 
+# ── Demographic subgroup selection (before data load) ──
+with st.sidebar:
+    st.markdown("### Comparison Subgroup")
+    subgroup_label = st.selectbox(
+        "X axis — support among:",
+        list(DEMO_SUBGROUPS.keys()),
+        index=0,
+        key="il_subgroup",
+        help="The scatter X axis shows this group's support rate. "
+             "Useful for finding topics with strong reach into a specific audience.",
+    )
+subgroup_key = DEMO_SUBGROUPS[subgroup_label]
+
 # Load and aggregate
-question_data = load_question_data(mode=data_mode)
+question_data = load_question_data(mode=data_mode, subgroup_key=subgroup_key)
 topics = aggregate_to_topics(question_data)
 
 if not topics:
@@ -329,7 +421,7 @@ with st.sidebar:
     quad_filter = st.multiselect("Category", list(QUAD_COLORS.keys()),
                                   default=list(QUAD_COLORS.keys()), key="il_quad")
 
-    view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List"], key="il_view")
+    view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List", "MPT View"], key="il_view")
 
     st.divider()
     st.metric("Topics", f"{len(df_plot)}")
@@ -527,9 +619,10 @@ if view_mode == "Consensus Gauge":
 elif view_mode == "Scatter":
     st.markdown("## Scatter Plot")
     st.caption(
-        "Each dot is a reform topic. Horizontal = support among reform skeptics. "
-        "Vertical = overall public support. Hover over dots for details. "
-        "The Golden Zone (upper right) contains topics with broad consensus."
+        f"Each dot is a reform topic. "
+        f"Horizontal = support among **{subgroup_label}**. "
+        f"Vertical = overall public support. Hover over dots for details. "
+        f"The Golden Zone (upper right) has broad support from both this group and the public overall."
     )
 
     # Dynamic axis range
@@ -539,6 +632,8 @@ elif view_mode == "Scatter":
     y_max = min(100, filtered["overall_support"].max() + 5)
 
     quad_x, quad_y = 60, 60
+
+    x_axis_label = f"{subgroup_label} Support %"
 
     fig = px.scatter(
         filtered, x="skeptic_support", y="overall_support",
@@ -560,7 +655,7 @@ elif view_mode == "Scatter":
         size_max=22,
         opacity=0.85,
         labels={
-            "skeptic_support": "Skeptic Support %",
+            "skeptic_support": x_axis_label,
             "overall_support": "Overall Support %",
             "n_questions": "Survey Questions",
             "tier": "Persuasion Tier",
@@ -580,13 +675,13 @@ elif view_mode == "Scatter":
     label_top_y = min(y_max - 1, y_max - 2)
     label_bot_y = max(y_min + 1, y_min + 2)
 
-    fig.add_annotation(x=label_left_x, y=label_top_y, text="Base Only", showarrow=False,
+    fig.add_annotation(x=label_left_x, y=label_top_y, text="Overall Only", showarrow=False,
                        font=dict(color="#1155AA", size=11), opacity=0.6)
     fig.add_annotation(x=label_right_x, y=label_top_y, text="Golden Zone", showarrow=False,
                        font=dict(color="#1B6B3A", size=13, family="Playfair Display"), opacity=0.85)
     fig.add_annotation(x=label_left_x, y=label_bot_y, text="Low Support", showarrow=False,
                        font=dict(color="#8B1A1A", size=11), opacity=0.6)
-    fig.add_annotation(x=label_right_x, y=label_bot_y, text="Persuasion Target", showarrow=False,
+    fig.add_annotation(x=label_right_x, y=label_bot_y, text=f"Strong {subgroup_label}", showarrow=False,
                        font=dict(color="#B85400", size=11), opacity=0.6)
 
     # NOTE: Removed individual topic label annotations from scatter to eliminate overlapping text
@@ -650,7 +745,7 @@ elif view_mode == "Scatter":
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Overall Support", f"{topic_row['overall_support']:.0f}%")
-            c2.metric("Skeptic Support", f"{topic_row['skeptic_support']:.0f}%")
+            c2.metric(f"{subgroup_label} Support", f"{topic_row['skeptic_support']:.0f}%" if topic_row['skeptic_support'] is not None else "—")
             c3.metric("Category", topic_row["quadrant"])
             c4.metric("Persuasion Tier", topic_row["tier"] if topic_row["tier"] else "—")
 
@@ -742,6 +837,224 @@ elif view_mode == "Ranked List":
     display_df.index = display_df.index + 1
 
     st.dataframe(display_df, use_container_width=True, height=500)
+
+
+# ══════════════════════════════════════════════════════════════════
+# MPT VIEW — MrP Reach × Universality scatter
+# ══════════════════════════════════════════════════════════════════
+
+elif view_mode == "MPT View":
+    st.markdown("## MPT Scatter — Reach × Universality")
+    st.caption(
+        "**Reach** = MrP-adjusted overall support across all surveyed states. "
+        "**Universality** = cross-state consistency (100 − std dev of state-level rates). "
+        "Topics in the upper-right hold up everywhere and have broad support — the safest message investment."
+    )
+
+    mpt_records = load_mpt_scatter_data()
+
+    if not mpt_records:
+        st.warning("MPT scatter requires MrP data from at least 2 states. Run the MrP pipeline for additional state surveys first.")
+        st.stop()
+
+    mpt_df = pd.DataFrame(mpt_records)
+
+    # Apply tier filter (reuse sidebar selection)
+    if tier_filter != "All Tiers":
+        mpt_df = mpt_df[mpt_df["tier"] == tier_filter]
+
+    if mpt_df.empty:
+        st.warning("No topics match the current tier filter.")
+        st.stop()
+
+    # ── KPI row ──
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Topics Plotted", f"{len(mpt_df)}")
+    c2.metric("Avg Reach", f"{mpt_df['reach'].mean():.0f}%")
+    c3.metric("Avg Universality", f"{mpt_df['universality'].mean():.0f}")
+    c4.metric("States Covered", f"{mpt_df['n_states'].max()}")
+
+    # ── Quadrant thresholds ──
+    reach_thresh = 60.0
+    univ_thresh = mpt_df["universality"].median()  # data-driven midpoint
+
+    MPT_QUAD_COLORS = {
+        "Universal Consensus": "#1B6B3A",    # High Reach + High Universality
+        "Fragmented Consensus": "#1155AA",   # High Reach + Low Universality
+        "Consistent Niche": "#B85400",       # Low Reach + High Universality
+        "Volatile / Niche": "#8B1A1A",       # Low Reach + Low Universality
+    }
+
+    def mpt_quadrant(row):
+        hi_reach = row["reach"] >= reach_thresh
+        hi_univ  = row["universality"] >= univ_thresh
+        if hi_reach and hi_univ:
+            return "Universal Consensus"
+        elif hi_reach and not hi_univ:
+            return "Fragmented Consensus"
+        elif not hi_reach and hi_univ:
+            return "Consistent Niche"
+        else:
+            return "Volatile / Niche"
+
+    mpt_df = mpt_df.copy()
+    mpt_df["quadrant"] = mpt_df.apply(mpt_quadrant, axis=1)
+
+    # ── Regression line ──
+    x_vals = mpt_df["reach"].values
+    y_vals = mpt_df["universality"].values
+    try:
+        coef = np.polyfit(x_vals, y_vals, 1)
+        x_reg = np.linspace(x_vals.min() - 2, x_vals.max() + 2, 100)
+        y_reg = np.polyval(coef, x_reg)
+        r_sq = np.corrcoef(x_vals, y_vals)[0, 1] ** 2
+        show_regression = True
+    except Exception:
+        show_regression = False
+        r_sq = None
+
+    # ── Build hover text (include per-state breakdown) ──
+    hover_texts = []
+    for _, row in mpt_df.iterrows():
+        breakdown = "<br>".join(
+            f"  {s}: {v}%" for s, v in row["state_breakdown"].items()
+        )
+        hover_texts.append(
+            f"<b>{row['topic']}</b><br>"
+            f"Reach: {row['reach']:.1f}%<br>"
+            f"Universality: {row['universality']:.1f}<br>"
+            f"Tier: {row['tier'] or '—'}<br>"
+            f"States ({row['n_states']}):<br>{breakdown}"
+            f"<extra></extra>"
+        )
+
+    fig_mpt = px.scatter(
+        mpt_df,
+        x="reach", y="universality",
+        color="quadrant",
+        color_discrete_map=MPT_QUAD_COLORS,
+        size="n_states",
+        size_max=20,
+        opacity=0.88,
+        labels={
+            "reach": "MrP Reach %",
+            "universality": "MrP Universality",
+            "quadrant": "Quadrant",
+        },
+        custom_data=["topic", "tier", "n_states"],
+    )
+
+    # Override hover to use our custom text
+    for i, trace in enumerate(fig_mpt.data):
+        quad_name = trace.name
+        mask = mpt_df["quadrant"] == quad_name
+        trace.hovertemplate = [
+            hover_texts[j] for j in mpt_df.index[mask].tolist()
+        ]
+
+    # Regression overlay
+    if show_regression:
+        fig_mpt.add_trace(go.Scatter(
+            x=x_reg, y=y_reg,
+            mode="lines",
+            line=dict(color="#9CA3AF", width=1.5, dash="dot"),
+            showlegend=True,
+            name=f"Regression (R²={r_sq:.2f})",
+            hoverinfo="skip",
+        ))
+
+    # Quadrant dividers
+    x_min = max(0, x_vals.min() - 5)
+    x_max = min(100, x_vals.max() + 5)
+    y_min_plot = max(0, y_vals.min() - 3)
+    y_max_plot = min(100, y_vals.max() + 3)
+
+    fig_mpt.add_hline(y=univ_thresh, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    if reach_thresh >= x_min and reach_thresh <= x_max:
+        fig_mpt.add_vline(x=reach_thresh, line_dash="dash", line_color="#D4D0C8", line_width=1)
+
+    # Quadrant annotations
+    lx = max(x_min + 1, (x_min + reach_thresh) / 2)
+    rx = min(x_max - 1, (reach_thresh + x_max) / 2)
+    ty = min(y_max_plot - 0.5, y_max_plot - 1)
+    by = max(y_min_plot + 0.5, y_min_plot + 1)
+    fig_mpt.add_annotation(x=lx, y=ty, text="Consistent Niche",      showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
+    fig_mpt.add_annotation(x=rx, y=ty, text="Universal Consensus",   showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
+    fig_mpt.add_annotation(x=lx, y=by, text="Volatile / Niche",      showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
+    fig_mpt.add_annotation(x=rx, y=by, text="Fragmented Consensus",  showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
+
+    fig_mpt.update_layout(
+        template="plotly_white",
+        paper_bgcolor=BG,
+        plot_bgcolor=CARD_BG,
+        height=640,
+        margin=dict(l=60, r=20, t=50, b=60),
+        xaxis=dict(
+            range=[x_min, x_max], dtick=10, gridcolor="#E8E4DC",
+            title="MrP Reach % (overall population support)",
+            title_font=dict(color=NAVY, size=12),
+        ),
+        yaxis=dict(
+            range=[y_min_plot, y_max_plot], gridcolor="#E8E4DC",
+            title="MrP Universality (100 − cross-state std dev)",
+            title_font=dict(color=NAVY, size=12),
+        ),
+        legend=dict(
+            font=dict(size=10, color=NAVY),
+            bgcolor="rgba(250,249,246,0.9)",
+            bordercolor=BORDER2, borderwidth=1,
+        ),
+        font=dict(family="DM Sans", color=NAVY),
+        title=dict(
+            text=f"MrP Reach × Universality · {len(mpt_df)} topics across {mpt_df['n_states'].max()} states",
+            font=dict(size=13, color=NAVY),
+            x=0.01,
+        ),
+    )
+
+    st.plotly_chart(fig_mpt, use_container_width=True, key="il_mpt_scatter")
+
+    # ── Interpretation box ──
+    if show_regression and r_sq is not None:
+        slope_dir = "positively" if coef[0] > 0 else "negatively"
+        st.markdown(f"""
+        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {GOLD};
+            border-radius:8px;padding:1rem 1.25rem;margin-top:0.5rem;font-size:0.85rem;color:{TEXT2};">
+            <strong style="color:{NAVY};">Regression read:</strong>
+            Reach and Universality are <strong>{slope_dir} correlated</strong>
+            (R²={r_sq:.2f}). The universality threshold (dashed horizontal) is set at the median
+            ({univ_thresh:.1f}) across plotted topics.
+            Universality = 100 − std dev, so 90+ means &lt;10pp spread across states.
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Per-topic state breakdown table ──
+    st.divider()
+    st.markdown("#### State-Level Detail")
+    st.caption("Select a topic to see its per-state MrP support rates.")
+
+    topic_opts_mpt = sorted(mpt_df["topic"].tolist())
+    sel_mpt = st.selectbox("Topic", ["(select a topic)"] + topic_opts_mpt, key="il_mpt_topic")
+    if sel_mpt != "(select a topic)":
+        sel_row = mpt_df[mpt_df["topic"] == sel_mpt].iloc[0]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Reach", f"{sel_row['reach']:.1f}%")
+        c2.metric("Universality", f"{sel_row['universality']:.1f}")
+        c3.metric("Tier", sel_row["tier"] or "—")
+
+        # Per-state bars
+        for state_name, pct in sel_row["state_breakdown"].items():
+            color = STATE_COLORS.get(state_name, NAVY)
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
+                f'<div style="width:120px;font-size:0.82rem;color:{TEXT2};text-align:right;">{state_name}</div>'
+                f'<div style="flex:1;height:18px;background:{BORDER2};border-radius:4px;overflow:hidden;">'
+                f'<div style="width:{min(pct,100):.0f}%;height:100%;background:{color};border-radius:4px;"></div>'
+                f'</div>'
+                f'<div style="width:44px;font-size:0.85rem;font-weight:600;color:{color};">{pct:.0f}%</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
 
 
 portal_footer()

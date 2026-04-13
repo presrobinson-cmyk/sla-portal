@@ -145,7 +145,11 @@ def table_exists() -> bool:
         return False
 
 
-def fetch_posts(channel: str, limit: int = 60) -> list:
+def fetch_posts(channel: str, limit: int = 60, force: bool = False) -> list:
+    """Fetch posts for a channel. Served from session_state cache unless force=True."""
+    cache_key = f"_posts_{channel}"
+    if not force and cache_key in st.session_state:
+        return st.session_state[cache_key]
     try:
         url, hdrs = _headers()
         resp = requests.get(
@@ -154,10 +158,11 @@ def fetch_posts(channel: str, limit: int = 60) -> list:
             headers=hdrs, timeout=10,
         )
         if resp.status_code == 200:
-            return resp.json()
+            st.session_state[cache_key] = resp.json()
+            return st.session_state[cache_key]
     except Exception:
         pass
-    return []
+    return st.session_state.get(cache_key, [])
 
 
 def post_message(uname: str, display_name: str, channel: str, message: str, tags: list = None) -> bool:
@@ -209,8 +214,10 @@ def load_display_name(uname: str) -> str:
     return uname
 
 
-def get_channel_counts() -> dict:
-    """Get post count per channel for sidebar badges."""
+def get_channel_counts(force: bool = False) -> dict:
+    """Get post count per channel. Served from session_state cache unless force=True."""
+    if not force and "_ch_counts" in st.session_state:
+        return st.session_state["_ch_counts"]
     try:
         url, hdrs = _headers()
         resp = requests.get(
@@ -223,10 +230,11 @@ def get_channel_counts() -> dict:
             for r in rows:
                 ch = r.get("channel", "")
                 counts[ch] = counts.get(ch, 0) + 1
+            st.session_state["_ch_counts"] = counts
             return counts
     except Exception:
         pass
-    return {}
+    return st.session_state.get("_ch_counts", {})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -344,7 +352,9 @@ with col_title:
 
 with col_refresh:
     if st.button("↻ Refresh", key="refresh_posts"):
-        st.session_state.pop("community_posts_cache", None)
+        # Clear all cached post data so next render fetches fresh
+        for k in [k for k in st.session_state if k.startswith("_posts_") or k == "_ch_counts"]:
+            st.session_state.pop(k, None)
         st.rerun()
 
 st.divider()

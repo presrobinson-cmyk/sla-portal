@@ -98,8 +98,12 @@ def _headers():
     return url, get_supabase_headers()
 
 
-def load_profile(uname: str) -> dict:
-    """Load profile for one user. Returns empty dict if not found."""
+def load_profile(uname: str, force: bool = False) -> dict:
+    """Load profile for one user. Session-state cached; returns empty dict if not found."""
+    cache_key = f"_profile_{uname}"
+    if not force and cache_key in st.session_state:
+        return st.session_state[cache_key]
+    result = {}
     try:
         url, hdrs = _headers()
         resp = requests.get(
@@ -108,14 +112,15 @@ def load_profile(uname: str) -> dict:
         )
         if resp.status_code == 200:
             rows = resp.json()
-            return rows[0] if rows else {}
+            result = rows[0] if rows else {}
     except Exception:
         pass
-    return {}
+    st.session_state[cache_key] = result
+    return result
 
 
 def save_profile(uname: str, data: dict) -> bool:
-    """Upsert profile. Returns True on success."""
+    """Upsert profile. Returns True on success; clears cached profiles on success."""
     try:
         url, hdrs = _headers()
         hdrs["Prefer"] = "resolution=merge-duplicates"
@@ -137,13 +142,22 @@ def save_profile(uname: str, data: dict) -> bool:
             f"{url}/rest/v1/user_profiles",
             headers=hdrs, data=json.dumps(payload), timeout=10,
         )
-        return resp.status_code in (200, 201, 204)
+        if resp.status_code in (200, 201, 204):
+            # Bust cache so updated data is immediately visible
+            for key in list(st.session_state.keys()):
+                if key.startswith("_profile_") or key == "_all_profiles":
+                    del st.session_state[key]
+            return True
+        return False
     except Exception:
         return False
 
 
-def load_all_profiles() -> list:
-    """Load all public profiles for the directory."""
+def load_all_profiles(force: bool = False) -> list:
+    """Load all public profiles for the directory. Session-state cached."""
+    if not force and "_all_profiles" in st.session_state:
+        return st.session_state["_all_profiles"]
+    result = []
     try:
         url, hdrs = _headers()
         resp = requests.get(
@@ -151,10 +165,11 @@ def load_all_profiles() -> list:
             headers=hdrs, timeout=10,
         )
         if resp.status_code == 200:
-            return resp.json()
+            result = resp.json()
     except Exception:
         pass
-    return []
+    st.session_state["_all_profiles"] = result
+    return result
 
 
 def table_exists() -> bool:
@@ -258,6 +273,26 @@ with edit_col:
             max_chars=400,
         )
 
+        st.markdown(f'<div style="font-weight:700;color:{NAVY};margin-top:0.75rem;margin-bottom:0.4rem;">Contact (optional — visible to team)</div>', unsafe_allow_html=True)
+        contact_c1, contact_c2 = st.columns(2)
+        with contact_c1:
+            phone = st.text_input(
+                "Phone",
+                value=profile.get("phone", ""),
+                placeholder="e.g. 504-555-0100",
+            )
+            email = st.text_input(
+                "Email",
+                value=profile.get("email", ""),
+                placeholder="you@organization.org",
+            )
+        with contact_c2:
+            website = st.text_input(
+                "Website / LinkedIn",
+                value=profile.get("website", ""),
+                placeholder="https://…",
+            )
+
         st.markdown(f'<div style="font-weight:700;color:{NAVY};margin-top:0.75rem;margin-bottom:0.25rem;">Geographic Focus</div>', unsafe_allow_html=True)
 
         active_default = [s for s in (profile.get("states") or []) if s in ACTIVE_SURVEY_STATES]
@@ -293,6 +328,9 @@ with edit_col:
                     "organization": organization.strip(),
                     "role": role if role != "— select —" else "",
                     "bio": bio.strip(),
+                    "phone": phone.strip(),
+                    "email": email.strip(),
+                    "website": website.strip(),
                     "states": active_states + other_states,
                     "policy_areas": policy_areas,
                 })
@@ -340,8 +378,11 @@ with dir_col:
             org = p.get("organization", "")
             role_str = p.get("role", "")
             bio_str = p.get("bio", "")
+            phone_str = p.get("phone", "")
+            email_str = p.get("email", "")
+            website_str = p.get("website", "")
             states_list = p.get("states") or []
-            areas_list = (p.get("policy_areas") or [])[:4]  # show up to 4
+            areas_list = (p.get("policy_areas") or [])[:4]
 
             states_html = " ".join(
                 f'<span style="display:inline-block;background:rgba(14,31,61,0.07);border-radius:10px;'
@@ -354,26 +395,41 @@ with dir_col:
                 for a in areas_list
             )
 
+            # Contact line — only show what's filled in
+            contact_parts = []
+            if phone_str:
+                contact_parts.append(f'📞 {phone_str}')
+            if email_str:
+                contact_parts.append(f'<a href="mailto:{email_str}" style="color:{GOLD};text-decoration:none;">✉ {email_str}</a>')
+            if website_str:
+                label = website_str.replace("https://", "").replace("http://", "").rstrip("/")[:40]
+                contact_parts.append(f'<a href="{website_str}" target="_blank" style="color:{GOLD};text-decoration:none;">🔗 {label}</a>')
+            contact_html = (
+                f'<div style="font-size:0.75rem;color:{TEXT3};margin-top:4px;line-height:1.7;">'
+                + " &nbsp;·&nbsp; ".join(contact_parts) + "</div>"
+            ) if contact_parts else ""
+
             is_you = p.get("username") == username
             border_style = f"border:1px solid {GOLD};box-shadow:0 0 0 2px rgba(196,153,58,0.15);" if is_you else f"border:1px solid {BORDER2};"
 
-            st.markdown(f"""
-<div style="display:flex;gap:0.85rem;align-items:flex-start;
-     background:{CARD_BG};{border_style}border-radius:10px;
-     padding:0.75rem 1rem;margin-bottom:0.6rem;">
-    {initials_avatar(dname, 40)}
-    <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">
-            <span style="font-weight:700;color:{NAVY};font-size:0.93rem;">{dname}</span>
-            {"<span style='font-size:0.72rem;color:" + GOLD + ";'>you</span>" if is_you else ""}
-            {f'<span style="font-size:0.8rem;color:{TEXT3};">· {role_str}</span>' if role_str else ""}
-        </div>
-        {f'<div style="font-size:0.8rem;color:{TEXT2};margin-top:1px;">{org}</div>' if org else ""}
-        {f'<div style="font-size:0.78rem;color:{TEXT3};line-height:1.4;margin-top:3px;">{bio_str[:140]}{"…" if len(bio_str)>140 else ""}</div>' if bio_str else ""}
-        <div style="margin-top:5px;">{states_html}</div>
-        <div style="margin-top:3px;">{areas_html}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="display:flex;gap:0.85rem;align-items:flex-start;'
+                f'background:{CARD_BG};{border_style}border-radius:10px;'
+                f'padding:0.75rem 1rem;margin-bottom:0.6rem;">'
+                f'{initials_avatar(dname, 40)}'
+                f'<div style="flex:1;min-width:0;">'
+                f'<div style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;">'
+                f'<span style="font-weight:700;color:{NAVY};font-size:0.93rem;">{dname}</span>'
+                + (f'<span style="font-size:0.72rem;color:{GOLD};">you</span>' if is_you else '')
+                + (f'<span style="font-size:0.8rem;color:{TEXT3};">· {role_str}</span>' if role_str else '')
+                + f'</div>'
+                + (f'<div style="font-size:0.8rem;color:{TEXT2};margin-top:1px;">{org}</div>' if org else '')
+                + (f'<div style="font-size:0.78rem;color:{TEXT3};line-height:1.4;margin-top:3px;">{bio_str[:140]}{"…" if len(bio_str)>140 else ""}</div>' if bio_str else '')
+                + contact_html
+                + f'<div style="margin-top:5px;">{states_html}</div>'
+                + f'<div style="margin-top:3px;">{areas_html}</div>'
+                + f'</div></div>',
+                unsafe_allow_html=True,
+            )
 
 portal_footer()
