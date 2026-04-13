@@ -145,6 +145,26 @@ def _chat_css():
             background: rgba(184,135,10,0.15);
             border-color: {GOLD_MID};
         }}
+
+        /* Make chat input box visible against light background */
+        [data-testid="stChatInput"] {{
+            background: {CARD_BG} !important;
+            border: 2px solid {BORDER2} !important;
+            border-radius: 10px !important;
+        }}
+        [data-testid="stChatInput"] textarea {{
+            color: {TEXT1} !important;
+            background: {CARD_BG} !important;
+        }}
+        [data-testid="stChatInput"] textarea::placeholder {{
+            color: {TEXT3} !important;
+        }}
+        /* Chat message styling */
+        [data-testid="stChatMessage"] {{
+            background: {CARD_BG} !important;
+            border: 1px solid {BORDER2} !important;
+            border-radius: 10px !important;
+        }}
     </style>
     """, unsafe_allow_html=True)
 

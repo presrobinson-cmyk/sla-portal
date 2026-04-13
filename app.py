@@ -137,7 +137,7 @@ fig_map = go.Figure(data=go.Choropleth(
     locations=ALL_US_STATES,
     z=z_vals,
     locationmode="USA-states",
-    colorscale=[[0, "#E8E4DC"], [0.49, "#E8E4DC"], [0.51, GOLD], [1, GOLD]],
+    colorscale=[[0, "#E8E4DC"], [0.49, "#E8E4DC"], [0.51, "#0E1F3D"], [1, "#0E1F3D"]],
     showscale=False,
     hovertext=hover_texts,
     hoverinfo="text",
