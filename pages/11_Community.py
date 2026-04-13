@@ -2,18 +2,21 @@
 Community — Discussion board for portal users.
 Backed by Supabase `community_posts` table.
 
-Setup SQL (run once in Supabase SQL editor):
+Initial setup SQL (run once in Supabase SQL editor):
     CREATE TABLE IF NOT EXISTS community_posts (
         id           BIGSERIAL PRIMARY KEY,
         username     TEXT NOT NULL,
         display_name TEXT NOT NULL DEFAULT '',
         channel      TEXT NOT NULL DEFAULT 'general',
         message      TEXT NOT NULL,
+        tags         TEXT[] NOT NULL DEFAULT '{}',
         created_at   TIMESTAMPTZ DEFAULT NOW()
     );
-
     CREATE INDEX IF NOT EXISTS community_posts_channel_idx ON community_posts (channel);
     CREATE INDEX IF NOT EXISTS community_posts_created_idx ON community_posts (created_at DESC);
+
+If upgrading an existing table, run this instead:
+    ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
 """
 
 import streamlit as st
@@ -59,6 +62,72 @@ CHANNELS = {
 CHANNEL_KEYS = {v["key"]: k for k, v in CHANNELS.items()}
 
 # ─────────────────────────────────────────────────────────────────
+# TAG DEFINITIONS
+# ─────────────────────────────────────────────────────────────────
+
+# State tags — navy/gold per-state colors
+STATE_TAG_COLORS = {
+    "Louisiana":      ("#1155AA", "rgba(17,85,170,0.10)"),
+    "Oklahoma":       ("#B85400", "rgba(184,84,0,0.10)"),
+    "Virginia":       ("#5B1B8A", "rgba(91,27,138,0.10)"),
+    "Massachusetts":  ("#8B1A1A", "rgba(139,26,26,0.10)"),
+    "North Carolina": ("#1B6B3A", "rgba(27,107,58,0.10)"),
+    "New Jersey":     ("#7A4800", "rgba(122,72,0,0.10)"),
+}
+
+# Content-type tags — gold
+TYPE_TAG_COLORS = {
+    "announcement":   ("#1B6B3A", "rgba(27,107,58,0.10)"),
+    "question":       ("#5C5954", "rgba(0,0,0,0.07)"),
+    "urgent":         ("#8B1A1A", "rgba(139,26,26,0.10)"),
+    "data":           ("#B8870A", "rgba(184,135,10,0.10)"),
+    "media":          ("#B8870A", "rgba(184,135,10,0.10)"),
+    "survey":         ("#B8870A", "rgba(184,135,10,0.10)"),
+    "research":       ("#B8870A", "rgba(184,135,10,0.10)"),
+}
+
+# Policy topic tags — navy
+POLICY_TAG_COLORS = {
+    "bail reform":      ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "sentencing":       ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "reentry":          ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "public defender":  ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "expungement":      ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "death penalty":    ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "juvenile justice": ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "fines & fees":     ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "parole":           ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "mental health":    ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "racial equity":    ("#0E1F3D", "rgba(14,31,61,0.08)"),
+    "DV / victims":     ("#0E1F3D", "rgba(14,31,61,0.08)"),
+}
+
+ALL_TAGS = (
+    sorted(STATE_TAG_COLORS.keys())
+    + sorted(TYPE_TAG_COLORS.keys())
+    + sorted(POLICY_TAG_COLORS.keys())
+)
+
+def tag_color(tag: str):
+    """Return (text_color, bg_color) for a tag."""
+    if tag in STATE_TAG_COLORS:
+        return STATE_TAG_COLORS[tag]
+    if tag in TYPE_TAG_COLORS:
+        return TYPE_TAG_COLORS[tag]
+    if tag in POLICY_TAG_COLORS:
+        return POLICY_TAG_COLORS[tag]
+    return ("#5C5954", "rgba(0,0,0,0.06)")
+
+def render_tag_pill(tag: str, small: bool = False) -> str:
+    color, bg = tag_color(tag)
+    size = "0.68rem" if small else "0.74rem"
+    return (
+        f'<span style="display:inline-block;background:{bg};border:1px solid {color};'
+        f'border-radius:10px;padding:1px 9px;font-size:{size};'
+        f'font-weight:600;color:{color};margin:1px 3px 1px 0;">{tag}</span>'
+    )
+
+# ─────────────────────────────────────────────────────────────────
 # SUPABASE HELPERS
 # ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +160,7 @@ def fetch_posts(channel: str, limit: int = 60) -> list:
     return []
 
 
-def post_message(uname: str, display_name: str, channel: str, message: str) -> bool:
+def post_message(uname: str, display_name: str, channel: str, message: str, tags: list = None) -> bool:
     try:
         url, hdrs = _headers()
         hdrs["Content-Type"] = "application/json"
@@ -100,6 +169,7 @@ def post_message(uname: str, display_name: str, channel: str, message: str) -> b
             "display_name": display_name or uname,
             "channel": channel,
             "message": message.strip(),
+            "tags": tags or [],
         }
         resp = requests.post(
             f"{url}/rest/v1/community_posts",
@@ -199,11 +269,14 @@ CREATE TABLE IF NOT EXISTS community_posts (
     display_name TEXT NOT NULL DEFAULT '',
     channel      TEXT NOT NULL DEFAULT 'general',
     message      TEXT NOT NULL,
+    tags         TEXT[] NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
-
 CREATE INDEX IF NOT EXISTS community_posts_channel_idx ON community_posts (channel);
 CREATE INDEX IF NOT EXISTS community_posts_created_idx ON community_posts (created_at DESC);
+
+-- If upgrading an existing table:
+-- ALTER TABLE community_posts ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
 """, language="sql")
     portal_footer()
     st.stop()
@@ -279,17 +352,23 @@ st.divider()
 # ── Compose ────────────────────────────────────────────────────
 
 with st.form("compose_form", clear_on_submit=True):
-    compose_col, btn_col = st.columns([6, 1])
-    with compose_col:
-        new_message = st.text_area(
-            "Message",
-            height=80,
-            placeholder=f"Post to {selected_ch}…",
-            max_chars=2000,
+    new_message = st.text_area(
+        "Message",
+        height=90,
+        placeholder=f"Post to {selected_ch}…",
+        max_chars=2000,
+        label_visibility="collapsed",
+    )
+    tag_col, btn_col = st.columns([5, 1])
+    with tag_col:
+        selected_tags = st.multiselect(
+            "Tags",
+            options=ALL_TAGS,
+            default=[],
+            placeholder="Add tags (state, topic, type)…",
             label_visibility="collapsed",
         )
     with btn_col:
-        st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
         post_btn = st.form_submit_button("Post", type="primary", use_container_width=True)
 
     if post_btn:
@@ -298,23 +377,37 @@ with st.form("compose_form", clear_on_submit=True):
         elif len(new_message.strip()) < 3:
             st.warning("Message too short.")
         else:
-            ok = post_message(username, current_display, ch_key, new_message)
+            ok = post_message(username, current_display, ch_key, new_message, tags=selected_tags)
             if ok:
-                st.session_state.pop("community_posts_cache", None)
+                st.session_state.pop(f"community_posts_cache_{ch_key}", None)
                 st.rerun()
             else:
                 st.error("Failed to post. Check Supabase connection.")
 
 st.markdown("")
 
+# ── Tag filter ─────────────────────────────────────────────────
+
+filter_tag = st.selectbox(
+    "Filter by tag",
+    options=["All posts"] + ALL_TAGS,
+    key="tag_filter",
+    label_visibility="collapsed",
+)
+
+st.markdown("")
+
 # ── Messages ───────────────────────────────────────────────────
 
-# Cache posts in session state for this channel
 cache_key = f"community_posts_cache_{ch_key}"
 if cache_key not in st.session_state:
     st.session_state[cache_key] = fetch_posts(ch_key, limit=60)
 
 posts = st.session_state[cache_key]
+
+# Apply tag filter client-side
+if filter_tag != "All posts":
+    posts = [p for p in posts if filter_tag in (p.get("tags") or [])]
 
 if not posts:
     st.markdown(f"""
@@ -334,13 +427,14 @@ else:
         ts = format_ts(post.get("created_at", ""))
         is_own = poster_user == username
 
-        # Initials avatar (inline, small)
+        # Initials avatar (inline, small) — single-line to avoid markdown parser issue
         parts = poster_name.split()
         letters = (parts[0][0] + (parts[-1][0] if len(parts) > 1 else "")).upper()
-        avatar_html = f"""
-<div style="width:34px;height:34px;border-radius:50%;background:{NAVY};flex-shrink:0;
-     display:flex;align-items:center;justify-content:center;
-     font-size:0.7rem;font-weight:700;color:{GOLD};">{letters}</div>"""
+        avatar_html = (
+            f'<div style="width:34px;height:34px;border-radius:50%;background:{NAVY};flex-shrink:0;'
+            f'display:flex;align-items:center;justify-content:center;'
+            f'font-size:0.7rem;font-weight:700;color:{GOLD};">{letters}</div>'
+        )
 
         delete_area = ""
         if is_own:
@@ -349,21 +443,30 @@ else:
 
         border = f"border-left:3px solid {GOLD};" if is_own else f"border-left:3px solid {BORDER2};"
 
-        st.markdown(f"""
-<div style="display:flex;gap:0.75rem;align-items:flex-start;
-     background:{CARD_BG};{border}border-radius:0 8px 8px 0;
-     padding:0.65rem 0.9rem;margin-bottom:0.5rem;border-top:1px solid {BORDER2};border-right:1px solid {BORDER2};border-bottom:1px solid {BORDER2};">
-    {avatar_html}
-    <div style="flex:1;min-width:0;">
-        <div style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.25rem;">
-            <span style="font-weight:700;font-size:0.88rem;color:{NAVY};">{poster_name}</span>
-            {"<span style='font-size:0.7rem;color:" + GOLD + ";'>you</span>" if is_own else ""}
-            <span style="font-size:0.75rem;color:{TEXT3};">{ts}</span>
-        </div>
-        <div style="font-size:0.88rem;color:{TEXT1};line-height:1.6;white-space:pre-wrap;">{msg}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
+        post_tags = post.get("tags") or []
+        tags_html = ""
+        if post_tags:
+            pills = "".join(render_tag_pill(t, small=True) for t in post_tags)
+            tags_html = f'<div style="margin-top:6px;">{pills}</div>'
+
+        st.markdown(
+            f'<div style="display:flex;gap:0.75rem;align-items:flex-start;'
+            f'background:{CARD_BG};{border}border-radius:0 8px 8px 0;'
+            f'padding:0.65rem 0.9rem;margin-bottom:0.5rem;'
+            f'border-top:1px solid {BORDER2};border-right:1px solid {BORDER2};border-bottom:1px solid {BORDER2};">'
+            f'{avatar_html}'
+            f'<div style="flex:1;min-width:0;">'
+            f'<div style="display:flex;align-items:baseline;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.25rem;">'
+            f'<span style="font-weight:700;font-size:0.88rem;color:{NAVY};">{poster_name}</span>'
+            + (f'<span style="font-size:0.7rem;color:{GOLD};">you</span>' if is_own else '')
+            + f'<span style="font-size:0.75rem;color:{TEXT3};">{ts}</span>'
+            f'</div>'
+            f'<div style="font-size:0.88rem;color:{TEXT1};line-height:1.6;white-space:pre-wrap;">{msg}</div>'
+            f'{tags_html}'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
         # Delete option for own posts
         if is_own:

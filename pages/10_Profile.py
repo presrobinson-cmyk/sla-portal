@@ -2,18 +2,26 @@
 Profile — User profile, geographic focus areas, policy areas, and team directory.
 Backed by Supabase `user_profiles` table.
 
-Setup SQL (run once in Supabase SQL editor):
+Initial setup SQL (run once in Supabase SQL editor):
     CREATE TABLE IF NOT EXISTS user_profiles (
         username        TEXT PRIMARY KEY,
         display_name    TEXT NOT NULL DEFAULT '',
         organization    TEXT NOT NULL DEFAULT '',
         role            TEXT NOT NULL DEFAULT '',
         bio             TEXT NOT NULL DEFAULT '',
+        phone           TEXT NOT NULL DEFAULT '',
+        email           TEXT NOT NULL DEFAULT '',
+        website         TEXT NOT NULL DEFAULT '',
         states          TEXT[] NOT NULL DEFAULT '{}',
         policy_areas    TEXT[] NOT NULL DEFAULT '{}',
         created_at      TIMESTAMPTZ DEFAULT NOW(),
         updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
+
+If upgrading an existing table:
+    ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS phone   TEXT NOT NULL DEFAULT '';
+    ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS email   TEXT NOT NULL DEFAULT '';
+    ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS website TEXT NOT NULL DEFAULT '';
 """
 
 import streamlit as st
@@ -118,6 +126,9 @@ def save_profile(uname: str, data: dict) -> bool:
             "organization": data.get("organization", ""),
             "role": data.get("role", ""),
             "bio": data.get("bio", ""),
+            "phone": data.get("phone", ""),
+            "email": data.get("email", ""),
+            "website": data.get("website", ""),
             "states": data.get("states", []),
             "policy_areas": data.get("policy_areas", []),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -136,7 +147,7 @@ def load_all_profiles() -> list:
     try:
         url, hdrs = _headers()
         resp = requests.get(
-            f"{url}/rest/v1/user_profiles?select=username,display_name,organization,role,states,policy_areas,bio&order=display_name.asc",
+            f"{url}/rest/v1/user_profiles?select=username,display_name,organization,role,bio,phone,email,website,states,policy_areas&order=display_name.asc",
             headers=hdrs, timeout=10,
         )
         if resp.status_code == 200:
