@@ -1,7 +1,7 @@
 """
-Voter Segments — SLA Portal
-Shows the five voter segments (Skeptics → Champions), their demographic profiles,
-and a heat map of topic support across segments.
+Coalition Heatmap™ — SLA Portal
+Shows support rates for reform topics broken down by actual demographic subgroups:
+party, ideology, race/ethnicity, age, gender.
 """
 
 import streamlit as st
@@ -12,6 +12,7 @@ import numpy as np
 import plotly.graph_objects as go
 import requests
 from collections import defaultdict
+import re
 
 # Auth gate
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -33,24 +34,13 @@ try:
 except ImportError:
     SCORING_AVAILABLE = False
 
-st.set_page_config(page_title="Voter Segments — SLA Portal", page_icon="👥", layout="wide")
+st.set_page_config(page_title="Voter Segments — SLA Portal", page_icon="🎯", layout="wide")
 
 apply_theme()
 username = require_auth("Second Look Alliance", accent_color=GOLD)
 
 SUPABASE_URL, SUPABASE_KEY = get_supabase_config()
 HEADERS = get_supabase_headers()
-
-# Segment definitions
-SEGMENT_NAMES = ["Skeptics", "Lean Skeptic", "Middle", "Lean Reform", "Champions"]
-SEGMENT_COLORS = ["#8B1A1A", "#B85400", "#B8870A", "#1155AA", "#1B6B3A"]
-SEGMENT_DESC = {
-    "Skeptics": "Bottom 20% — Strongest opposition. Believe the system works. Only Entry-tier topics gain any traction.",
-    "Lean Skeptic": "20-40th percentile — Persuadable with the right framing. Bridge topics are the key.",
-    "Middle": "40-60th percentile — Open to reform arguments. Respond to cost/efficiency and fairness framing.",
-    "Lean Reform": "60-80th percentile — Broadly favorable but inconsistent. Need inoculation against opposition attacks.",
-    "Champions": "Top 20% — Strongest supporters. Already aligned. Focus on mobilization, not persuasion.",
-}
 
 # Human-readable construct names
 CONSTRUCT_LABELS = {
@@ -77,12 +67,23 @@ CONSTRUCT_LABELS = {
 # Gauge constructs — excluded from heat map (not reform topics)
 GAUGE_CONSTRUCTS = {"CAND", "TOUGHCRIME", "ISSUE_SALIENCE", "IMPACT"}
 
+# Demographic subgroups displayed in heatmap
+DEMOGRAPHIC_SUBGROUPS = [
+    "Overall",
+    "Republicans", "Democrats", "Independents",
+    "Conservatives", "Moderates", "Liberals",
+    "White", "Black", "Hispanic",
+    "Age 18-34", "Age 35-54", "Age 55+",
+    "Male", "Female",
+]
+
 
 # ══════════════════════════════════════════════════════════════════
 # DATA LOADING
 # ══════════════════════════════════════════════════════════════════
 
 def _paginate(url_base, headers, limit=1000, max_rows=200000):
+    """Paginate Supabase responses."""
     all_rows = []
     offset = 0
     while offset < max_rows:
@@ -98,9 +99,87 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
     return all_rows
 
 
-@st.cache_data(ttl=3600, show_spinner="Loading voter segment data...")
+def _map_party(party_id):
+    """Map party_id to party subgroup."""
+    if not party_id:
+        return None
+    party_lower = str(party_id).lower()
+    if "republican" in party_lower:
+        return "Republicans"
+    elif "democrat" in party_lower:
+        return "Democrats"
+    elif any(x in party_lower for x in ["independent", "unaffiliated", "no party"]):
+        return "Independents"
+    return None
+
+
+def _map_ideology(ideology):
+    """Map ideology field to ideology subgroup."""
+    if not ideology:
+        return None
+    ideology_lower = str(ideology).lower()
+    if "conservative" in ideology_lower:
+        return "Conservatives"
+    elif any(x in ideology_lower for x in ["moderate", "middle"]):
+        return "Moderates"
+    elif any(x in ideology_lower for x in ["liberal", "progressive"]):
+        return "Liberals"
+    return None
+
+
+def _map_race_ethnicity(race_ethnicity):
+    """Map race_ethnicity field to race subgroup."""
+    if not race_ethnicity:
+        return None
+    race_lower = str(race_ethnicity).lower()
+    if any(x in race_lower for x in ["white", "caucasian"]):
+        return "White"
+    elif any(x in race_lower for x in ["black", "african"]):
+        return "Black"
+    elif any(x in race_lower for x in ["hispanic", "latino", "latina"]):
+        return "Hispanic"
+    return None
+
+
+def _map_age(age_bracket):
+    """Map age_bracket field to age subgroup."""
+    if not age_bracket:
+        return None
+    age_str = str(age_bracket).lower()
+    # Try to extract numeric range
+    numbers = re.findall(r'\d+', age_str)
+    if numbers:
+        min_age = int(numbers[0])
+        if min_age < 35:
+            return "Age 18-34"
+        elif min_age < 55:
+            return "Age 35-54"
+        else:
+            return "Age 55+"
+    return None
+
+
+def _map_gender(gender):
+    """Map gender field to gender subgroup."""
+    if not gender:
+        return None
+    gender_lower = str(gender).lower()
+    if "female" in gender_lower or "woman" in gender_lower:
+        return "Female"
+    elif "male" in gender_lower and "female" not in gender_lower:
+        return "Male"
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading Coalition Heatmap™ data...")
 def load_segment_data():
-    """Pull L2 responses and L1 demographics, score, compute segments."""
+    """
+    Pull L2 responses and L1 demographics, score each response,
+    compute support rates by construct and demographic subgroup.
+
+    Returns:
+        dict: {construct: {subgroup: support_pct, count: n_responses}}
+    """
     # Pull L2 responses
     all_l2 = []
     for sid in CJ_SURVEYS:
@@ -145,375 +224,435 @@ def load_segment_data():
             "fav": 1 if fav == 1 else 0,
         })
 
-    # Compute disposition scores (average favorable rate per respondent)
-    resp_agg = defaultdict(lambda: {"fav": 0, "n": 0})
-    for s in scored:
-        resp_agg[s["rid"]]["fav"] += s["fav"]
-        resp_agg[s["rid"]]["n"] += 1
+    # Build demographic subgroup assignments per respondent
+    respondent_subgroups = defaultdict(list)
+    for rid, demo in demo_lookup.items():
+        # Overall
+        respondent_subgroups[rid].append("Overall")
 
-    disposition = {}
-    for rid, d in resp_agg.items():
-        if d["n"] >= 3:
-            disposition[rid] = d["fav"] / d["n"]
+        # Party
+        party = _map_party(demo.get("party_id"))
+        if party:
+            respondent_subgroups[rid].append(party)
 
-    # Assign quintiles (1=Skeptics, 5=Champions)
-    sorted_scores = sorted(disposition.items(), key=lambda x: x[1])
-    n = len(sorted_scores)
-    segments = {}
-    for i, (rid, sc) in enumerate(sorted_scores):
-        segments[rid] = min(int(i / n * 5) + 1, 5)
+        # Ideology
+        ideology = _map_ideology(demo.get("ideology"))
+        if ideology:
+            respondent_subgroups[rid].append(ideology)
 
-    # Compute per-construct per-segment support rates
-    con_seg = defaultdict(lambda: defaultdict(lambda: {"fav": 0, "n": 0}))
+        # Race/Ethnicity
+        race = _map_race_ethnicity(demo.get("race_ethnicity"))
+        if race:
+            respondent_subgroups[rid].append(race)
+
+        # Age
+        age = _map_age(demo.get("age_bracket"))
+        if age:
+            respondent_subgroups[rid].append(age)
+
+        # Gender
+        gender = _map_gender(demo.get("gender"))
+        if gender:
+            respondent_subgroups[rid].append(gender)
+
+    # Compute per-construct per-subgroup support rates
+    construct_subgroup_stats = defaultdict(lambda: defaultdict(lambda: {"fav": 0, "n": 0}))
     for s in scored:
         rid = s["rid"]
-        if rid not in segments:
+        construct = s["construct"]
+
+        # Add to Overall
+        construct_subgroup_stats[construct]["Overall"]["fav"] += s["fav"]
+        construct_subgroup_stats[construct]["Overall"]["n"] += 1
+
+        # Add to each demographic subgroup this respondent belongs to
+        for subgroup in respondent_subgroups.get(rid, []):
+            if subgroup != "Overall":
+                construct_subgroup_stats[construct][subgroup]["fav"] += s["fav"]
+                construct_subgroup_stats[construct][subgroup]["n"] += 1
+
+    # Build heatmap data: exclude GAUGE_CONSTRUCTS
+    heatmap_data = {}
+    for construct, subgroup_stats in construct_subgroup_stats.items():
+        if construct in GAUGE_CONSTRUCTS:
             continue
-        seg = segments[rid]
-        con = s["construct"]
-        con_seg[con][seg]["fav"] += s["fav"]
-        con_seg[con][seg]["n"] += 1
 
-    # Build heat map data
-    heat_map = {}
-    for con, seg_data in con_seg.items():
-        if con in GAUGE_CONSTRUCTS:
-            continue
-        rates = {}
-        total_n = 0
-        for seg_num in range(1, 6):
-            d = seg_data[seg_num]
-            total_n += d["n"]
-            rates[seg_num] = (d["fav"] / d["n"] * 100) if d["n"] >= 10 else None
-        if total_n >= 50:
-            heat_map[con] = rates
+        row = {}
+        for subgroup in DEMOGRAPHIC_SUBGROUPS:
+            stats = subgroup_stats.get(subgroup, {"fav": 0, "n": 0})
+            n = stats["n"]
+            # Require at least 30 responses
+            if n >= 30:
+                support_pct = stats["fav"] / n * 100
+                row[subgroup] = {
+                    "pct": support_pct,
+                    "n": n,
+                }
+            else:
+                row[subgroup] = {
+                    "pct": None,
+                    "n": n,
+                }
 
-    # Compute demographic profiles per segment
-    seg_demos = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
-    for rid, seg in segments.items():
-        demo = demo_lookup.get(rid, {})
-        for cat in ["party_id", "ideology", "race_ethnicity", "age_bracket", "gender", "education"]:
-            val = demo.get(cat)
-            if val:
-                seg_demos[seg][cat][val] += 1
+        # Only include construct if Overall has enough data
+        if row.get("Overall", {}).get("pct") is not None:
+            heatmap_data[construct] = row
 
-    seg_counts = defaultdict(int)
-    for seg in segments.values():
-        seg_counts[seg] += 1
+    return heatmap_data
 
-    return heat_map, seg_demos, seg_counts, len(disposition)
+
+# ══════════════════════════════════════════════════════════════════
+# COLOR FUNCTIONS
+# ══════════════════════════════════════════════════════════════════
+
+def get_cell_color(support_pct):
+    """Return (bg_color, text_color) tuple based on support percentage."""
+    if support_pct is None:
+        return ("#F5F5F5", TEXT3)  # Light gray for no data
+
+    if support_pct >= 75:
+        # Green for 75%+
+        return ("#E8F5E9", "#1B6B3A")
+    elif support_pct >= 60:
+        # Gold for 60-74%
+        return ("#FEF3E0", "#B8870A")
+    elif support_pct < 50:
+        # Red for below 50%
+        return ("#FFEBEE", "#8B1A1A")
+    else:
+        # Neutral for 50-59%
+        return ("#F9F9F9", TEXT2)
 
 
 # ══════════════════════════════════════════════════════════════════
 # MAIN PAGE
 # ══════════════════════════════════════════════════════════════════
 
-st.title("👥 Voter Segments")
+st.title("🎯 Voter Segments")
 st.markdown(
-    "Five voter segments based on overall disposition toward reform — from strongest opposition to strongest support. "
-    "Each person's segment is determined by their average response across all scored survey questions."
+    "Support rates for criminal justice reform topics broken down by demographic subgroups. "
+    "Green indicates strong support (75%+), gold moderate support (60-74%), and red opposition (below 50%). "
+    "Cells with fewer than 30 responses are not shown."
 )
 
 if not SCORING_AVAILABLE:
-    st.error("content_scoring.py not found. Cannot compute segments.")
+    st.error("content_scoring.py not found. Cannot compute support rates.")
     st.stop()
 
-heat_map, seg_demos, seg_counts, n_respondents = load_segment_data()
+heatmap_data = load_segment_data()
 
-if not heat_map:
-    st.warning("No segment data available.")
+if not heatmap_data:
+    st.warning("No Coalition Heatmap data available.")
     st.stop()
 
-# ── KPI row ──
-cols = st.columns(5)
-for i, (name, color) in enumerate(zip(SEGMENT_NAMES, SEGMENT_COLORS)):
-    with cols[i]:
-        count = seg_counts.get(i + 1, 0)
-        st.markdown(f"""
-        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-top:3px solid {color};
-            border-radius:8px;padding:0.75rem;text-align:center;">
-            <div style="font-weight:700;color:{color};font-size:1rem;">{name}</div>
-            <div style="font-size:1.4rem;font-weight:800;color:{NAVY};">{count:,}</div>
-            <div style="font-size:0.7rem;color:{TEXT3};">respondents</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-st.divider()
-
-# ── Sidebar: segment selector ──
+# ── Sidebar: view selector ──
 with st.sidebar:
-    st.markdown("### Segment Focus")
-    focus_seg = st.radio(
-        "Highlight segment:",
-        ["All Segments"] + SEGMENT_NAMES,
-        key="seg_focus",
+    st.markdown("### Views")
+    view_mode = st.radio(
+        "Select view:",
+        ["Coalition Heatmap", "Topic Deep Dive", "Demographic Profile"],
+        key="seg_view",
     )
 
-    view_mode = st.radio("View", ["Heat Map", "Segment Profiles", "Topic Comparison"], key="seg_view")
-
     st.divider()
-    st.metric("Total Respondents", f"{n_respondents:,}")
+    st.metric("Topics Analyzed", len(heatmap_data))
+    st.metric("Demographic Groups", len(DEMOGRAPHIC_SUBGROUPS))
 
 
 # ══════════════════════════════════════════════════════════════════
-# HEAT MAP VIEW — topics × segments
+# VIEW 1: COALITION HEATMAP (default)
 # ══════════════════════════════════════════════════════════════════
 
-if view_mode == "Heat Map":
-    st.subheader("Topic Support by Voter Segment")
+if view_mode == "Coalition Heatmap":
+    st.subheader("Support by Topic and Demographic")
     st.caption(
-        "Each cell shows the support rate for a topic within a voter segment. "
-        "Dark green = high support. Red = low support. "
-        "The gap between Skeptics and Champions reveals persuasion potential."
+        "Each row is a reform topic, sorted by persuasion tier. "
+        "Each column is a demographic subgroup. "
+        "Hover for exact percentages and sample sizes."
+    )
+
+    # Sort constructs by tier, then by label
+    constructs_sorted = sorted(
+        heatmap_data.keys(),
+        key=lambda c: (TIER_MAP.get(c, "ZZZ"), CONSTRUCT_LABELS.get(c, c))
     )
 
     # Build matrix
-    constructs_sorted = sorted(heat_map.keys(), key=lambda c: TIER_MAP.get(c, "ZZZ"))
-    topic_labels = [CONSTRUCT_LABELS.get(c, c) for c in constructs_sorted]
-    tiers = [TIER_MAP.get(c, "—") for c in constructs_sorted]
-
     z_values = []
     hover_texts = []
-    for con in constructs_sorted:
-        row = []
-        hover_row = []
-        for seg_num in range(1, 6):
-            val = heat_map[con].get(seg_num)
-            row.append(val if val is not None else 0)
-            if val is not None:
-                hover_row.append(
-                    f"{CONSTRUCT_LABELS.get(con, con)}<br>"
-                    f"{SEGMENT_NAMES[seg_num-1]}: {val:.0f}%"
-                )
-            else:
-                hover_row.append(f"{CONSTRUCT_LABELS.get(con, con)}<br>{SEGMENT_NAMES[seg_num-1]}: insufficient data")
-        z_values.append(row)
-        hover_texts.append(hover_row)
+    topic_labels = []
 
+    for construct in constructs_sorted:
+        row_z = []
+        row_hover = []
+        topic_labels.append(CONSTRUCT_LABELS.get(construct, construct))
+
+        for subgroup in DEMOGRAPHIC_SUBGROUPS:
+            cell_data = heatmap_data[construct].get(subgroup, {})
+            pct = cell_data.get("pct")
+            n = cell_data.get("n", 0)
+
+            if pct is not None:
+                row_z.append(pct)
+                row_hover.append(f"{CONSTRUCT_LABELS.get(construct, construct)}<br>{subgroup}<br>{pct:.1f}% (n={n})")
+            else:
+                row_z.append(None)
+                row_hover.append(f"{CONSTRUCT_LABELS.get(construct, construct)}<br>{subgroup}<br>Insufficient data (n={n})")
+
+        z_values.append(row_z)
+        hover_texts.append(row_hover)
+
+    # Create Plotly heatmap
     fig = go.Figure(data=go.Heatmap(
         z=z_values,
-        x=SEGMENT_NAMES,
-        y=[f"{t}  •  {TIER_MAP.get(c, '')}" for t, c in zip(topic_labels, constructs_sorted)],
+        x=DEMOGRAPHIC_SUBGROUPS,
+        y=[f"{label}  •  {TIER_MAP.get(c, '')}" for label, c in zip(topic_labels, constructs_sorted)],
         hovertext=hover_texts,
         hoverinfo="text",
         colorscale=[
-            [0, "#8B1A1A"],     # red for low support
-            [0.4, "#F5E6CC"],   # neutral cream
-            [0.6, "#C5E1A5"],   # light green
-            [1.0, "#1B6B3A"],   # dark green for high support
+            [0.0, "#8B1A1A"],     # red for low support
+            [0.4, "#F5E6CC"],     # neutral cream
+            [0.6, "#C5E1A5"],     # light green
+            [1.0, "#1B6B3A"],     # dark green for high support
         ],
         zmin=20,
         zmax=95,
-        text=[[f"{v:.0f}" if v else "" for v in row] for row in z_values],
-        texttemplate="%{text}%",
-        textfont=dict(size=11, color=NAVY),
+        text=[[f"{v:.0f}%" if v is not None else "—" for v in row] for row in z_values],
+        texttemplate="%{text}",
+        textfont=dict(size=10, color=NAVY),
+        colorbar=dict(title="Support %", thickness=15, len=0.7),
     ))
 
     fig.update_layout(
         template="plotly_white",
         paper_bgcolor=BG,
         plot_bgcolor=CARD_BG,
-        height=max(500, len(constructs_sorted) * 28 + 100),
-        margin=dict(l=280, r=30, t=30, b=60),
-        xaxis=dict(side="top", tickfont=dict(size=12, color=NAVY)),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
+        height=max(600, len(constructs_sorted) * 25 + 150),
+        margin=dict(l=320, r=100, t=40, b=120),
+        xaxis=dict(
+            side="bottom",
+            tickfont=dict(size=11, color=NAVY),
+            tickangle=45,
+        ),
+        yaxis=dict(autorange="reversed", tickfont=dict(size=10, color=NAVY)),
         font=dict(family="DM Sans", color=NAVY),
     )
 
-    st.plotly_chart(fig, use_container_width=True, key="seg_heatmap")
+    st.plotly_chart(fig, use_container_width=True, key="coalition_heatmap")
 
-    # Persuasion gap table below heat map
-    st.markdown("#### Biggest Persuasion Gaps")
-    st.caption("Topics with the largest difference between Skeptic and Champion support — your biggest persuasion opportunities.")
+    # ── Summary statistics ──
+    st.markdown("#### Strongest Support")
+    st.caption("Topics with the highest average support across all demographic groups.")
 
-    gap_data = []
-    for con in constructs_sorted:
-        skep = heat_map[con].get(1)
-        champ = heat_map[con].get(5)
-        if skep is not None and champ is not None:
-            gap_data.append({
-                "Topic": CONSTRUCT_LABELS.get(con, con),
-                "Tier": TIER_MAP.get(con, "—"),
-                "Skeptic": f"{skep:.0f}%",
-                "Champion": f"{champ:.0f}%",
-                "Gap": champ - skep,
-                "_gap_num": champ - skep,
-            })
+    avg_support = {}
+    for construct in constructs_sorted:
+        pcts = [
+            heatmap_data[construct][subgroup].get("pct")
+            for subgroup in DEMOGRAPHIC_SUBGROUPS
+        ]
+        pcts_valid = [p for p in pcts if p is not None]
+        if pcts_valid:
+            avg_support[construct] = np.mean(pcts_valid)
 
-    if gap_data:
-        gap_df = pd.DataFrame(gap_data).sort_values("_gap_num", ascending=False)
-        gap_df["Gap"] = gap_df["_gap_num"].apply(lambda g: f"{g:+.0f}pp")
-        st.dataframe(
-            gap_df[["Topic", "Tier", "Skeptic", "Champion", "Gap"]],
-            use_container_width=True, hide_index=True, height=400,
-        )
+    top_topics = sorted(avg_support.items(), key=lambda x: x[1], reverse=True)[:5]
 
-
-# ══════════════════════════════════════════════════════════════════
-# SEGMENT PROFILES — demographic makeup of each segment
-# ══════════════════════════════════════════════════════════════════
-
-elif view_mode == "Segment Profiles":
-    st.subheader("Who's in Each Segment?")
-    st.caption("Demographic breakdown shows what each voter segment looks like. Use the sidebar to focus on a specific segment.")
-
-    demo_labels = {
-        "party_id": "Party", "ideology": "Ideology", "race_ethnicity": "Race/Ethnicity",
-        "age_bracket": "Age", "gender": "Gender", "education": "Education",
-    }
-
-    if focus_seg == "All Segments":
-        display_segs = list(range(1, 6))
-    else:
-        display_segs = [SEGMENT_NAMES.index(focus_seg) + 1]
-
-    for seg_num in display_segs:
-        seg_name = SEGMENT_NAMES[seg_num - 1]
-        seg_color = SEGMENT_COLORS[seg_num - 1]
-        seg_count = seg_counts.get(seg_num, 0)
-        seg_desc = SEGMENT_DESC.get(seg_name, "")
-
-        st.markdown(f"""
-        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {seg_color};
-            border-radius:10px;padding:1.25rem;margin-bottom:0.5rem;">
-            <div style="font-family:'Playfair Display',serif;font-weight:700;color:{seg_color};
-                font-size:1.15rem;">{seg_name}</div>
-            <div style="font-size:0.85rem;color:{TEXT3};margin-bottom:0.5rem;">
-                {seg_count:,} respondents — {seg_desc}
+    summary_cols = st.columns(len(top_topics))
+    for col, (construct, avg_pct) in zip(summary_cols, top_topics):
+        with col:
+            tier = TIER_MAP.get(construct, "—")
+            st.markdown(f"""
+            <div style="background:{CARD_BG};border:1px solid {BORDER2};border-top:3px solid {GOLD};
+                border-radius:8px;padding:0.75rem;text-align:center;">
+                <div style="font-weight:700;color:{NAVY};font-size:0.85rem;">{CONSTRUCT_LABELS.get(construct, construct)}</div>
+                <div style="font-size:1.8rem;font-weight:800;color:{GOLD};">{avg_pct:.0f}%</div>
+                <div style="font-size:0.65rem;color:{TEXT3};">avg support • {tier}</div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Show top 2-3 demographics for this segment
-        demo_data = seg_demos.get(seg_num, {})
-        demo_cols = st.columns(3)
-
-        for col_idx, (cat, cat_label) in enumerate(list(demo_labels.items())[:3]):
-            with demo_cols[col_idx]:
-                vals = demo_data.get(cat, {})
-                if not vals:
-                    st.caption(f"{cat_label}: No data")
-                    continue
-
-                total = sum(vals.values())
-                sorted_vals = sorted(vals.items(), key=lambda x: x[1], reverse=True)[:6]
-
-                fig_demo = go.Figure(go.Bar(
-                    y=[v[0][:20] for v in sorted_vals],
-                    x=[v[1] / total * 100 for v in sorted_vals],
-                    orientation="h",
-                    marker_color=seg_color,
-                    text=[f"{v[1] / total * 100:.0f}%" for v in sorted_vals],
-                    textposition="auto",
-                    textfont=dict(size=10, color="white"),
-                ))
-                fig_demo.update_layout(
-                    title=dict(text=cat_label, font=dict(size=12, color=NAVY)),
-                    template="plotly_white",
-                    paper_bgcolor=BG,
-                    plot_bgcolor=CARD_BG,
-                    height=180,
-                    margin=dict(l=120, r=10, t=30, b=10),
-                    xaxis=dict(range=[0, 100], showticklabels=False, showgrid=False),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=10)),
-                    font=dict(family="DM Sans", color=NAVY),
-                )
-                st.plotly_chart(fig_demo, use_container_width=True, key=f"demo_{seg_num}_{cat}")
-
-        # Second row of demographics
-        demo_cols2 = st.columns(3)
-        for col_idx, (cat, cat_label) in enumerate(list(demo_labels.items())[3:6]):
-            with demo_cols2[col_idx]:
-                vals = demo_data.get(cat, {})
-                if not vals:
-                    st.caption(f"{cat_label}: No data")
-                    continue
-
-                total = sum(vals.values())
-                sorted_vals = sorted(vals.items(), key=lambda x: x[1], reverse=True)[:6]
-
-                fig_demo = go.Figure(go.Bar(
-                    y=[v[0][:20] for v in sorted_vals],
-                    x=[v[1] / total * 100 for v in sorted_vals],
-                    orientation="h",
-                    marker_color=seg_color,
-                    text=[f"{v[1] / total * 100:.0f}%" for v in sorted_vals],
-                    textposition="auto",
-                    textfont=dict(size=10, color="white"),
-                ))
-                fig_demo.update_layout(
-                    title=dict(text=cat_label, font=dict(size=12, color=NAVY)),
-                    template="plotly_white",
-                    paper_bgcolor=BG,
-                    plot_bgcolor=CARD_BG,
-                    height=180,
-                    margin=dict(l=120, r=10, t=30, b=10),
-                    xaxis=dict(range=[0, 100], showticklabels=False, showgrid=False),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=10)),
-                    font=dict(family="DM Sans", color=NAVY),
-                )
-                st.plotly_chart(fig_demo, use_container_width=True, key=f"demo2_{seg_num}_{cat}")
-
-        st.divider()
+            """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════
-# TOPIC COMPARISON — bar chart comparing segments for one topic
+# VIEW 2: TOPIC DEEP DIVE
 # ══════════════════════════════════════════════════════════════════
 
-elif view_mode == "Topic Comparison":
-    st.subheader("Compare Segments on a Topic")
-    st.caption("Select a topic to see how support varies across voter segments.")
+elif view_mode == "Topic Deep Dive":
+    st.subheader("Select a Topic to See Demographic Breakdown")
+    st.caption("Horizontal bar chart showing support rate for one topic across all demographic subgroups.")
 
-    topic_options = sorted(
-        [c for c in heat_map.keys()],
-        key=lambda c: CONSTRUCT_LABELS.get(c, c),
+    constructs_sorted = sorted(
+        heatmap_data.keys(),
+        key=lambda c: (TIER_MAP.get(c, "ZZZ"), CONSTRUCT_LABELS.get(c, c))
     )
-    topic_labels_list = [CONSTRUCT_LABELS.get(c, c) for c in topic_options]
-    label_to_code = dict(zip(topic_labels_list, topic_options))
+    topic_labels_list = [CONSTRUCT_LABELS.get(c, c) for c in constructs_sorted]
+    label_to_code = dict(zip(topic_labels_list, constructs_sorted))
 
-    selected_label = st.selectbox("Topic", sorted(topic_labels_list), key="seg_topic")
-    selected_con = label_to_code.get(selected_label, "")
+    selected_label = st.selectbox("Topic", sorted(topic_labels_list), key="deep_dive_topic")
+    selected_construct = label_to_code.get(selected_label, "")
 
-    if selected_con and selected_con in heat_map:
-        rates = heat_map[selected_con]
-        bar_vals = [rates.get(i, 0) or 0 for i in range(1, 6)]
+    if selected_construct and selected_construct in heatmap_data:
+        # Get data for this construct
+        construct_row = heatmap_data[selected_construct]
 
-        fig_comp = go.Figure(go.Bar(
-            x=SEGMENT_NAMES,
-            y=bar_vals,
-            marker_color=SEGMENT_COLORS,
-            text=[f"{v:.0f}%" if v else "—" for v in bar_vals],
-            textposition="outside",
-            textfont=dict(size=13, color=NAVY),
+        # Build bar chart data
+        subgroup_names = []
+        support_values = []
+        bar_colors = []
+
+        for subgroup in DEMOGRAPHIC_SUBGROUPS:
+            cell_data = construct_row.get(subgroup, {})
+            pct = cell_data.get("pct")
+
+            if pct is not None:
+                subgroup_names.append(subgroup)
+                support_values.append(pct)
+
+                # Color by support level
+                if pct >= 75:
+                    bar_colors.append("#1B6B3A")  # Green
+                elif pct >= 60:
+                    bar_colors.append("#B8870A")  # Gold
+                elif pct < 50:
+                    bar_colors.append("#8B1A1A")  # Red
+                else:
+                    bar_colors.append(NAVY)  # Navy neutral
+
+        fig_dive = go.Figure(go.Bar(
+            y=subgroup_names,
+            x=support_values,
+            orientation="h",
+            marker_color=bar_colors,
+            text=[f"{v:.1f}%" for v in support_values],
+            textposition="auto",
+            textfont=dict(size=11, color="white"),
         ))
 
-        fig_comp.update_layout(
+        fig_dive.update_layout(
             template="plotly_white",
             paper_bgcolor=BG,
             plot_bgcolor=CARD_BG,
             height=400,
-            margin=dict(l=40, r=20, t=40, b=60),
-            yaxis=dict(range=[0, 105], title="Support %", gridcolor="#E8E4DC",
-                       title_font=dict(color=NAVY)),
-            xaxis=dict(tickfont=dict(size=12, color=NAVY)),
+            margin=dict(l=150, r=20, t=40, b=40),
+            xaxis=dict(
+                range=[0, 105],
+                title="Support %",
+                title_font=dict(color=NAVY, size=12),
+                gridcolor="#E8E4DC",
+            ),
+            yaxis=dict(autorange="reversed", tickfont=dict(size=11, color=NAVY)),
             font=dict(family="DM Sans", color=NAVY),
         )
 
-        st.plotly_chart(fig_comp, use_container_width=True, key="seg_compare_bar")
+        st.plotly_chart(fig_dive, use_container_width=True, key="deep_dive_bar")
 
-        # Tier and gap info
-        tier = TIER_MAP.get(selected_con, "—")
-        skep = rates.get(1)
-        champ = rates.get(5)
-        gap = (champ - skep) if skep is not None and champ is not None else None
+        # ── Key stats ──
+        col1, col2, col3 = st.columns(3)
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Persuasion Tier", tier)
-        if skep is not None:
-            c2.metric("Skeptic Support", f"{skep:.0f}%")
-        if gap is not None:
-            c3.metric("Skeptic → Champion Gap", f"{gap:+.0f}pp")
+        overall_pct = construct_row.get("Overall", {}).get("pct")
+        if overall_pct is not None:
+            col1.metric("Overall Support", f"{overall_pct:.1f}%")
+
+        tier = TIER_MAP.get(selected_construct, "—")
+        col2.metric("Persuasion Tier", tier)
+
+        # Find max and min
+        valid_pcts = [construct_row[sg].get("pct") for sg in DEMOGRAPHIC_SUBGROUPS
+                      if construct_row.get(sg, {}).get("pct") is not None]
+        if valid_pcts:
+            gap = max(valid_pcts) - min(valid_pcts)
+            col3.metric("Support Gap", f"{gap:.1f}pp")
+
+
+# ══════════════════════════════════════════════════════════════════
+# VIEW 3: DEMOGRAPHIC PROFILE
+# ══════════════════════════════════════════════════════════════════
+
+elif view_mode == "Demographic Profile":
+    st.subheader("Select a Demographic Group to See Support Profile")
+    st.caption("Horizontal bar chart showing support rate for all topics within one demographic subgroup.")
+
+    selected_subgroup = st.selectbox(
+        "Demographic Group",
+        DEMOGRAPHIC_SUBGROUPS,
+        key="demo_profile_subgroup",
+    )
+
+    # Get data for this subgroup
+    constructs_sorted = sorted(
+        heatmap_data.keys(),
+        key=lambda c: (TIER_MAP.get(c, "ZZZ"), CONSTRUCT_LABELS.get(c, c))
+    )
+
+    subgroup_data = []
+    for construct in constructs_sorted:
+        cell_data = heatmap_data[construct].get(selected_subgroup, {})
+        pct = cell_data.get("pct")
+
+        if pct is not None:
+            subgroup_data.append({
+                "topic": CONSTRUCT_LABELS.get(construct, construct),
+                "pct": pct,
+                "construct": construct,
+            })
+
+    if subgroup_data:
+        # Sort by support %
+        subgroup_data_sorted = sorted(subgroup_data, key=lambda x: x["pct"], reverse=True)
+
+        topic_names = [d["topic"] for d in subgroup_data_sorted]
+        support_pcts = [d["pct"] for d in subgroup_data_sorted]
+
+        # Color by support level
+        bar_colors_profile = []
+        for pct in support_pcts:
+            if pct >= 75:
+                bar_colors_profile.append("#1B6B3A")  # Green
+            elif pct >= 60:
+                bar_colors_profile.append("#B8870A")  # Gold
+            elif pct < 50:
+                bar_colors_profile.append("#8B1A1A")  # Red
+            else:
+                bar_colors_profile.append(NAVY)  # Navy neutral
+
+        fig_profile = go.Figure(go.Bar(
+            y=topic_names,
+            x=support_pcts,
+            orientation="h",
+            marker_color=bar_colors_profile,
+            text=[f"{v:.1f}%" for v in support_pcts],
+            textposition="auto",
+            textfont=dict(size=10, color="white"),
+        ))
+
+        fig_profile.update_layout(
+            template="plotly_white",
+            paper_bgcolor=BG,
+            plot_bgcolor=CARD_BG,
+            height=max(400, len(subgroup_data_sorted) * 20),
+            margin=dict(l=280, r=20, t=40, b=40),
+            xaxis=dict(
+                range=[0, 105],
+                title="Support %",
+                title_font=dict(color=NAVY, size=12),
+                gridcolor="#E8E4DC",
+            ),
+            yaxis=dict(autorange="reversed", tickfont=dict(size=10, color=NAVY)),
+            font=dict(family="DM Sans", color=NAVY),
+        )
+
+        st.plotly_chart(fig_profile, use_container_width=True, key="profile_bar")
+
+        # ── Summary for this subgroup ──
+        col1, col2, col3 = st.columns(3)
+
+        avg_support_subgroup = np.mean(support_pcts)
+        col1.metric("Average Support", f"{avg_support_subgroup:.1f}%")
+
+        n_topics_strong = sum(1 for p in support_pcts if p >= 75)
+        col2.metric("Topics with 75%+ Support", n_topics_strong)
+
+        n_topics_weak = sum(1 for p in support_pcts if p < 50)
+        col3.metric("Topics Below 50% Support", n_topics_weak)
+    else:
+        st.warning(f"No data available for {selected_subgroup}. This group may be underrepresented in the data.")
 
 
 render_chat("voter_segments")

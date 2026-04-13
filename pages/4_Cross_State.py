@@ -215,14 +215,30 @@ if not topic_matrix:
     st.warning("Not enough multi-state data available yet.")
     st.stop()
 
-# KPI row
+# KPI row — custom HTML to avoid column truncation
 state_abbrs = [STATE_ABBR.get(s, s[:2]) for s in all_states]
-cols = st.columns(len(all_states) + 1)
-with cols[0]:
-    st.metric("States", str(len(all_states)))
-for i, state in enumerate(all_states):
-    with cols[i + 1]:
-        st.metric(STATE_ABBR.get(state, state[:2]), f"{state_counts.get(state, 0):,}")
+kpi_items = f"""
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:0.5rem;">
+    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;
+         padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">
+        <div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">States</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{len(all_states)}</div>
+    </div>
+"""
+for state in all_states:
+    abbr = STATE_ABBR.get(state, state[:2])
+    count = state_counts.get(state, 0)
+    s_color = STATE_COLORS.get(state, NAVY)
+    kpi_items += f"""
+    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-top:3px solid {s_color};
+         border-radius:10px;padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">
+        <div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">{abbr}</div>
+        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{count:,}</div>
+        <div style="font-size:0.65rem;color:{TEXT3};">respondents</div>
+    </div>
+"""
+kpi_items += "</div>"
+st.markdown(kpi_items, unsafe_allow_html=True)
 
 st.divider()
 

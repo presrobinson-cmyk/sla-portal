@@ -1,9 +1,8 @@
 """
 Issue Landscape — SLA Portal
-Scatter: Each dot is a TOPIC (construct), not an individual question.
-Click a topic to see the individual survey questions that make it up.
-Quadrants: Golden Zone / Base Only / Persuasion Target / Low Support.
-Uses raw survey support rates (not MrP-adjusted) for accurate placement.
+Consensus Gauge primary view: sorted horizontal bars by topic support (Consensus Gauge™ style).
+Scatter as secondary view with fixed labels (hover-only).
+All questions ranked below.
 """
 
 import streamlit as st
@@ -55,6 +54,13 @@ QUAD_COLORS = {
     "Base Only": "#1155AA",
     "Persuasion Target": "#B85400",
     "Low Support": "#8B1A1A",
+}
+
+# Consensus Gauge colors (by support level)
+GAUGE_COLORS = {
+    "strong": "#1B6B3A",      # Green: 75%+
+    "moderate": "#B8870A",    # Gold: 55-74%
+    "contested": "#8B1A1A",   # Red: <55%
 }
 
 # Human-readable construct names (replace internal codes)
@@ -262,15 +268,24 @@ def aggregate_to_topics(question_data):
     return topics
 
 
+def get_gauge_color(support_pct):
+    """Return color code based on support percentage (Consensus Gauge style)."""
+    if support_pct >= 75:
+        return GAUGE_COLORS["strong"]  # Green: #1B6B3A
+    elif support_pct >= 55:
+        return GAUGE_COLORS["moderate"]  # Gold: #B8870A
+    else:
+        return GAUGE_COLORS["contested"]  # Red: #8B1A1A
+
+
 # ══════════════════════════════════════════════════════════════════
 # MAIN PAGE
 # ══════════════════════════════════════════════════════════════════
 
 st.title("⚡ Issue Landscape")
 st.caption(
-    "Each dot is a reform topic. Horizontal = support among reform skeptics. "
-    "Vertical = overall public support. Best topics land upper-right (Golden Zone). "
-    "Click any topic to see the individual survey questions behind it."
+    "Each dot is a reform topic. Upper-right (Golden Zone) = broad bipartisan support. "
+    "Hover any dot for details. Switch views in the sidebar for ranked lists and consensus gauges."
 )
 
 if not SCORING_AVAILABLE:
@@ -290,7 +305,7 @@ df_plot = df.dropna(subset=["skeptic_support"])
 
 # ── Sidebar filters ──
 with st.sidebar:
-    st.markdown("### Filters")
+    st.markdown("### Filters & View")
 
     all_tiers = sorted(df["tier"].dropna().unique())
     tier_filter = st.selectbox("Persuasion Tier", ["All Tiers"] + all_tiers, key="il_tier")
@@ -298,7 +313,7 @@ with st.sidebar:
     quad_filter = st.multiselect("Category", list(QUAD_COLORS.keys()),
                                   default=list(QUAD_COLORS.keys()), key="il_quad")
 
-    view_mode = st.radio("View", ["Scatter", "Ranked List"], key="il_view")
+    view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List"], key="il_view")
 
     st.divider()
     st.metric("Topics", f"{len(df_plot)}")
@@ -319,10 +334,265 @@ if filtered.empty:
 
 
 # ══════════════════════════════════════════════════════════════════
-# SCATTER VIEW — one dot per topic
+# CONSENSUS GAUGE VIEW (PRIMARY)
 # ══════════════════════════════════════════════════════════════════
 
-if view_mode == "Scatter":
+if view_mode == "Consensus Gauge":
+    st.markdown("## Consensus Gauge™")
+    st.caption(
+        "Topics sorted by overall public support. Each bar shows the proportion of respondents who favor that reform. "
+        "Hover for details; select a topic below to explore individual survey questions."
+    )
+
+    # Sort by overall support descending
+    gauge_data = filtered.sort_values("overall_support", ascending=True)
+
+    # Build the horizontal bar chart
+    fig_gauge = go.Figure()
+
+    for idx, (_, row) in enumerate(gauge_data.iterrows()):
+        support_pct = row["overall_support"]
+        color = get_gauge_color(support_pct)
+        tier = row["tier"] if row["tier"] else "—"
+
+        fig_gauge.add_trace(go.Bar(
+            y=[row["topic"]],
+            x=[support_pct],
+            orientation="h",
+            marker=dict(color=color),
+            text=f"{support_pct:.0f}%",
+            textposition="auto",
+            textfont=dict(color="white", size=12, family="DM Sans"),
+            hovertemplate=(
+                f"<b>{row['topic']}</b><br>"
+                f"Overall Support: {support_pct:.1f}%<br>"
+                f"Persuasion Tier: {tier}<br>"
+                f"Survey Questions: {row['n_questions']}<br>"
+                f"Respondents: {row['n_respondents']}"
+                "<extra></extra>"
+            ),
+            showlegend=False,
+            name="",
+        ))
+
+    fig_gauge.update_layout(
+        template="plotly_white",
+        paper_bgcolor=BG,
+        plot_bgcolor=CARD_BG,
+        height=max(400, len(gauge_data) * 45 + 100),
+        margin=dict(l=350, r=60, t=40, b=60),
+        xaxis=dict(
+            title="Overall Support %",
+            range=[0, 100],
+            gridcolor="#E8E4DC",
+            dtick=10,
+            title_font=dict(size=12, color=NAVY),
+        ),
+        yaxis=dict(
+            tickfont=dict(size=11, color=NAVY),
+            autorange="reversed",
+        ),
+        font=dict(family="DM Sans", color=NAVY, size=11),
+        hovermode="closest",
+    )
+
+    st.plotly_chart(fig_gauge, use_container_width=True, key="il_gauge")
+
+    # ── Topic selection dropdown ──
+    st.divider()
+    st.markdown("### Explore a Topic")
+
+    topic_opts = sorted(filtered["topic"].tolist())
+    selected_label = st.selectbox(
+        "Select a topic to see individual survey questions:",
+        ["(click to explore)"] + topic_opts,
+        key="il_topic_select",
+    )
+
+    if selected_label != "(click to explore)":
+        match = filtered[filtered["topic"] == selected_label]
+        if not match.empty:
+            topic_row = match.iloc[0]
+
+            # Topic detail header
+            st.markdown(
+                f'<div style="font-family:Playfair Display,serif;font-size:1.4rem;font-weight:700;color:{NAVY};">'
+                f'{topic_row["topic"]}</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Metrics
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Overall Support", f"{topic_row['overall_support']:.0f}%")
+            c2.metric("Skeptic Support", f"{topic_row['skeptic_support']:.0f}%" if topic_row['skeptic_support'] else "—")
+            c3.metric("Category", topic_row["quadrant"])
+            c4.metric("Persuasion Tier", topic_row["tier"] if topic_row["tier"] else "—")
+
+            # Individual questions within topic
+            questions = topic_row["questions"]
+            if questions and len(questions) > 0:
+                st.markdown(
+                    f'<div style="font-size:0.95rem;color:{TEXT2};margin:1rem 0 0.5rem 0;">'
+                    f'<strong>{len(questions)} survey questions</strong> supporting this topic:</div>',
+                    unsafe_allow_html=True,
+                )
+
+                q_df = pd.DataFrame(questions)
+
+                # Horizontal bar chart with full question text (no truncation)
+                fig_q = go.Figure()
+
+                fig_q.add_trace(go.Bar(
+                    y=q_df["text"],
+                    x=q_df["overall_support"],
+                    name="Overall Support",
+                    orientation="h",
+                    marker_color=NAVY,
+                    text=q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
+                    textposition="auto",
+                    textfont=dict(color="white", size=9),
+                    hovertemplate="%{y}<br>Overall: %{x:.1f}%<extra></extra>",
+                ))
+
+                skeptic_vals = q_df["skeptic_support"].fillna(0)
+                fig_q.add_trace(go.Bar(
+                    y=q_df["text"],
+                    x=skeptic_vals,
+                    name="Skeptic Support",
+                    orientation="h",
+                    marker_color=GOLD,
+                    text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
+                    textposition="auto",
+                    textfont=dict(color=NAVY, size=9),
+                    hovertemplate="%{y}<br>Skeptic: %{x:.1f}%<extra></extra>",
+                ))
+
+                fig_q.update_layout(
+                    barmode="group",
+                    template="plotly_white",
+                    paper_bgcolor=BG,
+                    plot_bgcolor=CARD_BG,
+                    height=max(300, len(q_df) * 60 + 100),
+                    margin=dict(l=500, r=30, t=30, b=40),
+                    xaxis=dict(
+                        title="Support %",
+                        range=[0, 100],
+                        gridcolor="#E8E4DC",
+                        title_font=dict(color=NAVY),
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",
+                        tickfont=dict(size=10),
+                    ),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.02,
+                        font=dict(size=10, color=NAVY),
+                    ),
+                    font=dict(family="DM Sans", color=NAVY),
+                    hovermode="closest",
+                )
+
+                st.plotly_chart(fig_q, use_container_width=True, key="il_question_bars_gauge")
+
+    # ══════════════════════════════════════════════════════════════
+    # ALL QUESTIONS RANKED (always shown in Consensus Gauge view)
+    # ══════════════════════════════════════════════════════════════
+
+    st.divider()
+    st.markdown("### All Questions Ranked")
+    st.caption(
+        "Every individual survey question ranked by overall support. "
+        "Navy = overall public support. Gold = support among reform skeptics."
+    )
+
+    # Build flat list of all individual questions from filtered topics
+    all_questions = []
+    for _, topic_row_iter in filtered.iterrows():
+        questions_list = topic_row_iter.get("questions", [])
+        if questions_list:
+            for q in questions_list:
+                all_questions.append({
+                    "text": q["text"],
+                    "overall_support": q["overall_support"],
+                    "skeptic_support": q["skeptic_support"],
+                    "n": q["n"],
+                    "topic": topic_row_iter["topic"],
+                })
+
+    if all_questions:
+        all_q_df = pd.DataFrame(all_questions).sort_values("overall_support", ascending=True)
+        # Cap at top 40 to keep page reasonable
+        all_q_df = all_q_df.tail(40)
+
+        fig_dual = go.Figure()
+
+        fig_dual.add_trace(go.Bar(
+            y=all_q_df["text"],
+            x=all_q_df["overall_support"],
+            name="Overall Support",
+            orientation="h",
+            marker_color=NAVY,
+            text=all_q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
+            textposition="auto",
+            textfont=dict(color="white", size=10),
+            hovertemplate="%{y}<br>Overall: %{x:.1f}%<extra></extra>",
+        ))
+
+        skeptic_vals = all_q_df["skeptic_support"].fillna(0)
+        fig_dual.add_trace(go.Bar(
+            y=all_q_df["text"],
+            x=skeptic_vals,
+            name="Skeptic Support",
+            orientation="h",
+            marker_color=GOLD,
+            text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
+            textposition="auto",
+            textfont=dict(color=NAVY, size=10),
+            hovertemplate="%{y}<br>Skeptic: %{x:.1f}%<extra></extra>",
+        ))
+
+        fig_dual.update_layout(
+            barmode="group",
+            template="plotly_white",
+            paper_bgcolor=BG,
+            plot_bgcolor=CARD_BG,
+            height=max(500, len(all_q_df) * 50 + 100),
+            margin=dict(l=500, r=30, t=30, b=50),
+            xaxis=dict(
+                title="Support %",
+                range=[0, 100],
+                gridcolor="#E8E4DC",
+                dtick=10,
+                title_font=dict(color=NAVY),
+            ),
+            yaxis=dict(tickfont=dict(size=10)),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                font=dict(size=12, color=NAVY),
+            ),
+            font=dict(family="DM Sans", color=NAVY),
+            hovermode="closest",
+        )
+
+        st.plotly_chart(fig_dual, use_container_width=True, key="il_dual_bar_gauge")
+
+
+# ══════════════════════════════════════════════════════════════════
+# SCATTER VIEW (SECONDARY)
+# ══════════════════════════════════════════════════════════════════
+
+elif view_mode == "Scatter":
+    st.markdown("## Scatter Plot")
+    st.caption(
+        "Each dot is a reform topic. Horizontal = support among reform skeptics. "
+        "Vertical = overall public support. Hover over dots for details. "
+        "The Golden Zone (upper right) contains topics with broad consensus."
+    )
+
     # Dynamic axis range
     x_min = max(0, filtered["skeptic_support"].min() - 8)
     x_max = min(100, filtered["skeptic_support"].max() + 5)
@@ -359,13 +629,13 @@ if view_mode == "Scatter":
         },
     )
 
-    # Quadrant dividers
+    # Quadrant dividers (kept from original)
     if quad_y >= y_min and quad_y <= y_max:
         fig.add_hline(y=quad_y, line_dash="dash", line_color="#D4D0C8", line_width=1)
     if quad_x >= x_min and quad_x <= x_max:
         fig.add_vline(x=quad_x, line_dash="dash", line_color="#D4D0C8", line_width=1)
 
-    # Quadrant labels
+    # Quadrant labels (kept from original, no text annotations on dots)
     label_left_x = max(x_min + 2, (x_min + quad_x) / 2)
     label_right_x = min(x_max - 2, (quad_x + x_max) / 2)
     label_top_y = min(y_max - 1, y_max - 2)
@@ -380,19 +650,7 @@ if view_mode == "Scatter":
     fig.add_annotation(x=label_right_x, y=label_bot_y, text="Persuasion Target", showarrow=False,
                        font=dict(color="#B85400", size=11), opacity=0.6)
 
-    # Add topic labels directly on chart for readability
-    for _, row in filtered.iterrows():
-        short_name = row["topic"]
-        if len(short_name) > 20:
-            short_name = short_name[:18] + "…"
-        fig.add_annotation(
-            x=row["skeptic_support"], y=row["overall_support"],
-            text=short_name,
-            showarrow=False,
-            yshift=14,
-            font=dict(size=9, color=NAVY),
-            opacity=0.7,
-        )
+    # NOTE: Removed individual topic label annotations from scatter to eliminate overlapping text
 
     fig.update_layout(
         template="plotly_white",
@@ -432,7 +690,7 @@ if view_mode == "Scatter":
         sel_label = st.selectbox(
             "Or select a topic:",
             ["(click a dot above)"] + topic_opts,
-            key="il_topic_select",
+            key="il_topic_select_scatter",
         )
         if sel_label != "(click a dot above)":
             match = filtered[filtered["topic"] == sel_label]
@@ -462,22 +720,17 @@ if view_mode == "Scatter":
             if questions and len(questions) > 0:
                 st.markdown(
                     f'<div style="font-size:0.9rem;color:{TEXT2};margin:0.5rem 0;">'
-                    f'<strong>{len(questions)} survey questions</strong> in this topic — '
-                    f'click to see how each one performs:</div>',
+                    f'<strong>{len(questions)} survey questions</strong> in this topic</div>',
                     unsafe_allow_html=True,
                 )
 
                 q_df = pd.DataFrame(questions)
-                # Truncate question text for chart labels
-                q_df["short_text"] = q_df["text"].apply(
-                    lambda t: (t[:70] + "…") if len(t) > 70 else t if t else "—"
-                )
 
                 # Horizontal bar chart: overall support + skeptic support side by side
                 fig_q = go.Figure()
 
                 fig_q.add_trace(go.Bar(
-                    y=q_df["short_text"],
+                    y=q_df["text"],
                     x=q_df["overall_support"],
                     name="Overall Support",
                     orientation="h",
@@ -489,7 +742,7 @@ if view_mode == "Scatter":
 
                 skeptic_vals = q_df["skeptic_support"].fillna(0)
                 fig_q.add_trace(go.Bar(
-                    y=q_df["short_text"],
+                    y=q_df["text"],
                     x=skeptic_vals,
                     name="Skeptic Support",
                     orientation="h",
@@ -505,7 +758,7 @@ if view_mode == "Scatter":
                     paper_bgcolor=BG,
                     plot_bgcolor=CARD_BG,
                     height=max(250, len(q_df) * 55 + 80),
-                    margin=dict(l=350, r=30, t=30, b=40),
+                    margin=dict(l=500, r=30, t=30, b=40),
                     xaxis=dict(title="Support %", range=[0, 100], gridcolor="#E8E4DC",
                                title_font=dict(color=NAVY)),
                     yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
@@ -516,7 +769,7 @@ if view_mode == "Scatter":
                     font=dict(family="DM Sans", color=NAVY),
                 )
 
-                st.plotly_chart(fig_q, use_container_width=True, key="il_question_bars")
+                st.plotly_chart(fig_q, use_container_width=True, key="il_question_bars_scatter")
 
     # ══════════════════════════════════════════════════════════════
     # DUAL BAR — individual questions ranked (always shown below scatter)
@@ -526,8 +779,7 @@ if view_mode == "Scatter":
     st.markdown("#### All Questions Ranked")
     st.caption(
         "Every individual survey question ranked by overall support. "
-        "Navy = overall public support. Gold = support among reform skeptics. "
-        "This is the same data as the scatter above, broken out by question."
+        "Navy = overall public support. Gold = support among reform skeptics."
     )
 
     # Build flat list of all individual questions from filtered topics
@@ -546,17 +798,13 @@ if view_mode == "Scatter":
 
     if all_questions:
         all_q_df = pd.DataFrame(all_questions).sort_values("overall_support", ascending=True)
-        # Truncate question text
-        all_q_df["label"] = all_q_df["text"].apply(
-            lambda t: (t[:80] + "…") if len(str(t)) > 80 else (t if t else "—")
-        )
         # Cap at top 40 to keep page reasonable
         all_q_df = all_q_df.tail(40)
 
         fig_dual = go.Figure()
 
         fig_dual.add_trace(go.Bar(
-            y=all_q_df["label"],
+            y=all_q_df["text"],
             x=all_q_df["overall_support"],
             name="Overall Support",
             orientation="h",
@@ -569,7 +817,7 @@ if view_mode == "Scatter":
 
         skeptic_vals = all_q_df["skeptic_support"].fillna(0)
         fig_dual.add_trace(go.Bar(
-            y=all_q_df["label"],
+            y=all_q_df["text"],
             x=skeptic_vals,
             name="Skeptic Support",
             orientation="h",
@@ -586,7 +834,7 @@ if view_mode == "Scatter":
             paper_bgcolor=BG,
             plot_bgcolor=CARD_BG,
             height=max(500, len(all_q_df) * 40 + 100),
-            margin=dict(l=400, r=30, t=30, b=50),
+            margin=dict(l=500, r=30, t=30, b=50),
             xaxis=dict(title="Support %", range=[0, 100], gridcolor="#E8E4DC",
                        dtick=10, title_font=dict(color=NAVY)),
             yaxis=dict(tickfont=dict(size=10)),
@@ -597,7 +845,7 @@ if view_mode == "Scatter":
             font=dict(family="DM Sans", color=NAVY),
         )
 
-        st.plotly_chart(fig_dual, use_container_width=True, key="il_dual_bar")
+        st.plotly_chart(fig_dual, use_container_width=True, key="il_dual_bar_scatter")
 
 
 # ══════════════════════════════════════════════════════════════════
