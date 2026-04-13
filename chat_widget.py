@@ -234,26 +234,31 @@ def render_chat(page_key: str = "home"):
 
     st.divider()
 
-    # Chat header
-    st.markdown("""
-    <div class="chat-header">
-        <div style="font-size:1.3rem;">💬</div>
-        <div>
-            <div class="chat-header-title">Ask the Data</div>
-            <div class="chat-header-sub">AI-powered research assistant · Ask anything about the polling data</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Chat input FIRST — this is the main feature
+    if prompt := st.chat_input("💬 Ask about the data...", key=f"chat_input_{page_key}"):
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
 
-    # Show starter suggestions if no messages yet
+        # Get AI response
+        context = PAGE_CONTEXT.get(page_key, "")
+        api_messages = [{"role": m["role"], "content": m["content"]}
+                        for m in st.session_state.chat_messages]
+        response = _call_claude(api_messages, context)
+        st.session_state.chat_messages.append({"role": "assistant", "content": response})
+        st.rerun()
+
+    # Starter suggestions if no messages yet
     starters = STARTER_QUESTIONS.get(page_key, STARTER_QUESTIONS["home"])
     if not st.session_state.chat_messages:
+        st.markdown(f"""
+        <div style="font-size:0.82rem;color:{TEXT3};margin-bottom:8px;margin-top:4px;">
+            💬 <strong style="color:{NAVY};">Ask the Data</strong> — try one of these:
+        </div>
+        """, unsafe_allow_html=True)
         cols = st.columns(len(starters))
         for i, (col, q) in enumerate(zip(cols, starters)):
             with col:
                 if st.button(q, key=f"starter_{page_key}_{i}", use_container_width=True):
                     st.session_state.chat_messages.append({"role": "user", "content": q})
-                    # Get AI response
                     context = PAGE_CONTEXT.get(page_key, "")
                     api_messages = [{"role": m["role"], "content": m["content"]}
                                     for m in st.session_state.chat_messages]
@@ -262,29 +267,11 @@ def render_chat(page_key: str = "home"):
                     st.rerun()
 
     # Display chat history
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # Chat input
-    if prompt := st.chat_input("Ask about the data...", key=f"chat_input_{page_key}"):
-        # Add user message
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-
-        # Get AI response
-        context = PAGE_CONTEXT.get(page_key, "")
-        api_messages = [{"role": m["role"], "content": m["content"]}
-                        for m in st.session_state.chat_messages]
-        response = _call_claude(api_messages, context)
-
-        st.session_state.chat_messages.append({"role": "assistant", "content": response})
-        with st.chat_message("assistant"):
-            st.markdown(response)
-
-    # Clear chat button (small, at the bottom)
     if st.session_state.chat_messages:
+        for msg in st.session_state.chat_messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
         col1, col2, col3 = st.columns([4, 1, 4])
         with col2:
             if st.button("Clear chat", key=f"clear_{page_key}", use_container_width=True):

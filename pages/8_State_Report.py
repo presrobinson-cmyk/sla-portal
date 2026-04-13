@@ -61,6 +61,9 @@ st.set_page_config(page_title="State Report — SLA Portal", page_icon="📊", l
 apply_theme()
 username = require_auth("Second Look Alliance", accent_color=GOLD)
 
+# Remove default page title — we render our own with the pills
+# st.title handled below with pills
+
 SUPABASE_URL, SUPABASE_KEY = get_supabase_config()
 HEADERS = get_supabase_headers()
 
@@ -69,29 +72,42 @@ HEADERS = get_supabase_headers()
 # ─────────────────────────────────────────────────────────────────
 
 ABBR_TO_STATE = {v: k for k, v in STATE_ABBR.items()}
-all_active_abbrs = sorted(set(STATE_ABBR[s] for s in SURVEY_STATE.values() if s in STATE_ABBR))
+# Sort by full state name alphabetically, then get their abbreviations in that order
+all_active_states = sorted(set(s for s in SURVEY_STATE.values() if s in STATE_ABBR))
+all_active_abbrs = [STATE_ABBR[s] for s in all_active_states]
 
-selected_abbr = st.session_state.get("selected_state")
-
-sidebar_choice = st.sidebar.selectbox(
-    "Select State",
-    options=all_active_abbrs,
-    format_func=lambda a: f"{a} — {ABBR_TO_STATE.get(a, a)}",
-    index=all_active_abbrs.index(selected_abbr) if selected_abbr in all_active_abbrs else 0,
-    key="state_selector",
-)
-
-if sidebar_choice != selected_abbr:
-    selected_abbr = sidebar_choice
-    st.session_state["selected_state"] = selected_abbr
-
-if not selected_abbr:
-    selected_abbr = all_active_abbrs[0] if all_active_abbrs else None
-    st.session_state["selected_state"] = selected_abbr
-
-if not selected_abbr:
+if not all_active_abbrs:
     st.warning("No states with data available.")
     st.stop()
+
+selected_abbr = st.session_state.get("selected_state", all_active_abbrs[0])
+if selected_abbr not in all_active_abbrs:
+    selected_abbr = all_active_abbrs[0]
+
+# ── State pills — alphabetical row of clickable buttons ──
+st.markdown(
+    f'<div style="font-family:Playfair Display,serif;font-weight:700;color:{NAVY};'
+    f'font-size:1.5rem;margin-bottom:0.75rem;">📊 State Report</div>',
+    unsafe_allow_html=True,
+)
+
+pill_cols = st.columns(len(all_active_abbrs))
+for i, abbr in enumerate(all_active_abbrs):
+    full_name = ABBR_TO_STATE.get(abbr, abbr)
+    with pill_cols[i]:
+        is_selected = (abbr == selected_abbr)
+        if st.button(
+            f"**{abbr}**" if is_selected else abbr,
+            key=f"pill_{abbr}",
+            use_container_width=True,
+            type="primary" if is_selected else "secondary",
+            help=full_name,
+        ):
+            selected_abbr = abbr
+            st.session_state["selected_state"] = abbr
+            st.rerun()
+
+st.markdown("")  # spacing
 
 state_name = ABBR_TO_STATE.get(selected_abbr, selected_abbr)
 state_color = STATE_COLORS.get(state_name, "#8C8984")
