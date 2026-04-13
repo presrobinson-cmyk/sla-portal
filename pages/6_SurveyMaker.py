@@ -26,6 +26,12 @@ try:
 except ImportError:
     SCORING_AVAILABLE = False
 
+try:
+    from survey_insights_cache import get_insights_for_constructs, SURVEY_INSIGHTS
+    INSIGHTS_AVAILABLE = True
+except ImportError:
+    INSIGHTS_AVAILABLE = False
+
 # Shared data loader (MrP primary, raw fallback)
 from data_loader import load_question_data_hybrid, render_data_source_toggle, get_display_pct
 
@@ -531,6 +537,167 @@ with st.expander("View pathway-ordered question sequence (for survey assembly)",
             <span style="font-size:0.78rem;color:{TEXT2};">{row['topic_label']} — {row['text'][:70]}…</span>
         </div>
         """, unsafe_allow_html=True)
+
+st.markdown("")
+st.divider()
+
+# ─────────────────────────────────────────────────────────────────
+# QUESTION RECOMMENDATIONS
+# ─────────────────────────────────────────────────────────────────
+
+st.markdown("### 📚 Question Recommendations")
+st.caption(
+    "Top questions from our library for your selected topics, plus design insights "
+    "flagged for these constructs. Use this to quickly identify proven questions "
+    "and known measurement gaps before building your next wave."
+)
+
+rec_col1, rec_col2 = st.columns([3, 2], gap="large")
+
+# Derive active constructs from the current topic selection
+active_constructs = (
+    sorted(questions_df[questions_df["topic_label"].isin(selected_topics)]["construct"].unique())
+    if selected_topics
+    else sorted(questions_df["construct"].unique())
+)
+
+with rec_col1:
+    st.markdown(
+        f"""<div style="font-weight:700;color:{NAVY};font-size:0.95rem;
+        margin-bottom:0.75rem;">Top Library Picks</div>""",
+        unsafe_allow_html=True,
+    )
+
+    picks_source = (
+        questions_df[questions_df["topic_label"].isin(selected_topics)].copy()
+        if selected_topics
+        else questions_df.copy()
+    )
+    picks_df = picks_source.sort_values("overall_support", ascending=False).head(12)
+
+    if picks_df.empty:
+        st.info("Select topics in the sidebar to see recommended questions.")
+    else:
+        tier_colors = {
+            "Entry": "#1B6B3A",
+            "Bridge": "#1155AA",
+            "Downstream": "#B8870A",
+            "Destination": "#8B1A1A",
+        }
+        for _, row in picks_df.iterrows():
+            pct = round(row["overall_support"]) if row["overall_support"] is not None else 0
+            tier = row.get("tier", "")
+            tc = tier_colors.get(tier, TEXT2)
+
+            if pct >= 75:
+                rec_label = "Strong consensus"
+                rec_bg = "rgba(27,107,58,0.06)"
+                dot_color = "#1B6B3A"
+            elif pct >= 55:
+                rec_label = "Moderate support"
+                rec_bg = "rgba(184,135,10,0.06)"
+                dot_color = "#B8870A"
+            else:
+                rec_label = "Contested"
+                rec_bg = "rgba(139,26,26,0.05)"
+                dot_color = "#8B1A1A"
+
+            qtext = row["text"]
+            short_text = (qtext[:110] + "…") if len(qtext) > 110 else qtext
+            st.markdown(
+                f"""
+                <div style="background:{rec_bg};border-radius:8px;padding:0.6rem 0.85rem;
+                     margin-bottom:7px;border-left:3px solid {tc};">
+                    <div style="font-size:0.82rem;color:{TEXT1};line-height:1.45;">{short_text}</div>
+                    <div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <span style="font-size:0.76rem;font-weight:700;color:{tc};">{pct}%</span>
+                        <span style="font-size:0.72rem;color:{tc};font-weight:600;
+                             background:rgba(0,0,0,0.04);padding:1px 7px;border-radius:10px;">{tier}</span>
+                        <span style="font-size:0.72rem;color:{TEXT3};">{row['topic_label']}</span>
+                        <span style="font-size:0.72rem;color:{dot_color};">· {rec_label}</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        if len(picks_source) > 12:
+            st.caption(f"Showing top 12 of {len(picks_source)} questions for selected topics.")
+
+with rec_col2:
+    st.markdown(
+        f"""<div style="font-weight:700;color:{NAVY};font-size:0.95rem;
+        margin-bottom:0.75rem;">Design Insights</div>""",
+        unsafe_allow_html=True,
+    )
+
+    if not INSIGHTS_AVAILABLE:
+        st.info("survey_insights_cache.py not found. Add it to the portal root.")
+    else:
+        open_insights = get_insights_for_constructs(active_constructs, status_filter="Open")
+
+        if not open_insights:
+            st.success("No open design issues for the selected constructs.")
+        else:
+            priority_styles = {
+                "Must address":    ("#8B1A1A", "rgba(139,26,26,0.08)"),
+                "Should address":  ("#B85500", "rgba(184,85,0,0.08)"),
+                "Nice to have":    ("#B8870A", "rgba(184,135,10,0.07)"),
+                "Long-term":       (TEXT3,     "rgba(14,31,61,0.04)"),
+            }
+            type_icons = {
+                "Measurement Gap":   "📏",
+                "Question Design":   "✏️",
+                "Scoring Lesson":    "📊",
+                "Construct Coverage":"🗂️",
+                "Strategic Signal":  "🎯",
+                "Methodology":       "⚙️",
+            }
+
+            for ins in open_insights[:7]:
+                color, bg = priority_styles.get(ins["priority"], (TEXT2, "rgba(0,0,0,0.04)"))
+                icon = type_icons.get(ins["type"], "ℹ️")
+                aff_constructs = ins["constructs"]
+                constructs_str = (
+                    ", ".join(aff_constructs[:4]) + ("…" if len(aff_constructs) > 4 else "")
+                )
+                desc_short = ins["description"][:170] + "…" if len(ins["description"]) > 170 else ins["description"]
+
+                with st.expander(f"{icon} {ins['insight']}", expanded=False):
+                    st.markdown(
+                        f"""
+                        <div style="font-size:0.75rem;color:{color};font-weight:600;
+                             margin-bottom:6px;">{ins['priority']} · {ins['type']}</div>
+                        <div style="font-size:0.8rem;color:{TEXT1};line-height:1.5;
+                             margin-bottom:8px;">{ins['description']}</div>
+                        <div style="background:rgba(0,0,0,0.03);border-radius:6px;
+                             padding:0.5rem 0.75rem;margin-bottom:6px;">
+                            <div style="font-size:0.73rem;font-weight:700;color:{NAVY};
+                                 margin-bottom:4px;">Recommended action</div>
+                            <div style="font-size:0.78rem;color:{TEXT2};line-height:1.45;">
+                                {ins['recommended_action']}</div>
+                        </div>
+                        <div style="font-size:0.71rem;color:{TEXT3};">
+                            Affects: {constructs_str}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+
+            if len(open_insights) > 7:
+                st.caption(f"+ {len(open_insights) - 7} more open insights for selected constructs.")
+
+            # Priority breakdown summary
+            must = sum(1 for i in open_insights if i["priority"] == "Must address")
+            should = sum(1 for i in open_insights if i["priority"] == "Should address")
+            if must or should:
+                st.markdown(
+                    f"""
+                    <div style="margin-top:0.5rem;font-size:0.75rem;color:{TEXT3};">
+                        {must} must address · {should} should address · {len(open_insights)} total open
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
 st.markdown("")
 st.divider()
