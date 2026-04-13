@@ -37,7 +37,16 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_question_data_hybrid, load_party_splits, load_demo_splits, load_mrp_question_summary, render_data_source_toggle, get_display_pct
+from data_loader import load_question_data_hybrid, load_party_splits, render_data_source_toggle, get_display_pct
+
+# New loaders added in Session 5 — defensive import so old deploys don't crash
+try:
+    from data_loader import load_demo_splits, load_mrp_question_summary
+    DEMO_SPLITS_AVAILABLE = True
+except ImportError:
+    DEMO_SPLITS_AVAILABLE = False
+    def load_demo_splits(*a, **kw): return {}
+    def load_mrp_question_summary(*a, **kw): return {}, set()
 
 st.set_page_config(
     page_title="Issue Landscape — SLA Portal",
