@@ -44,9 +44,9 @@ SURVEY_INSIGHTS: List[Dict[str, Any]] = [
         ),
         "recommended_action": (
             "Never use party as a proxy for reform direction. The content-based "
-            "REFORM_DIRECTION table (119 questions, content_scoring.py v3) should be "
+            "FAVORABLE_DIRECTION table (208 questions, content_scoring.py v5) is "
             "the canonical reference. Every new question added to future waves must "
-            "have its reform direction classified by content at design time, not "
+            "have its scoring direction classified by content at design time, not "
             "derived from partisan signal after fielding."
         ),
         "status": "Addressed",
@@ -206,26 +206,26 @@ SURVEY_INSIGHTS: List[Dict[str, Any]] = [
     },
     {
         "id": "recdq3GMiZNHZ0Yex",
-        "insight": "Content-based reform direction table now canonical (119 questions)",
+        "insight": "Content-based scoring direction table now canonical (208 questions)",
         "type": "Methodology",
         "priority": "Must address",
         "constructs": ["ALL"],
         "description": (
-            "The REFORM_DIRECTION dictionary in content_scoring.py v3 classifies all "
-            "119 policy questions by their text content — which response is "
-            "'reform-aligned' based on whether it reduces incarceration, increases "
-            "discretion, supports rehabilitation, acknowledges system problems, or "
-            "favors proportionality. Three classification types: 'likert' "
-            "(reform_side = support/oppose), 'binary' (reform_contains text match), "
-            "'multi_favorable' (list of favorable responses). 15 questions excluded as "
-            "non-policy. Saved as reform_direction_table.json."
+            "The FAVORABLE_DIRECTION dictionary in content_scoring.py (v5, formerly "
+            "REFORM_DIRECTION) classifies all 208 policy questions by their text "
+            "content — which response is 'reform-aligned' based on whether it reduces "
+            "incarceration, increases discretion, supports rehabilitation, acknowledges "
+            "system problems, or favors proportionality. Three classification types: "
+            "'likert' (favorable_side = support/oppose), 'binary' (favorable_contains "
+            "text match), 'multi_favorable' (list of favorable responses). "
+            "Non-policy questions are excluded (SKIPPED_DEMOGRAPHIC, etc.)."
         ),
         "recommended_action": (
-            "When designing new survey questions, add the reform direction "
-            "classification at design time and append to REFORM_DIRECTION. This table "
-            "is the single source of truth for all scoring. Store the classification "
-            "in Alchemer question metadata or a companion document so it survives "
-            "personnel transitions."
+            "When designing new survey questions, add the scoring direction "
+            "classification at design time and append to FAVORABLE_DIRECTION. This "
+            "table is the single source of truth for all scoring. Store the "
+            "classification in Alchemer question metadata or a companion document so "
+            "it survives personnel transitions."
         ),
         "status": "Open",
         "states": ["ALL"],
