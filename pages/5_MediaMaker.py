@@ -115,6 +115,4 @@ st.info(
     icon="ℹ️"
 )
 
-render_chat("mediamaker")
-
 portal_footer()

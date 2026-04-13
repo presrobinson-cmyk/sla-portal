@@ -121,23 +121,50 @@ ALL_US_STATES = [
     "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
 ]
 
+# Assign each active state a unique color index for distinct coloring
+active_state_list = sorted(stats["states_live"])
+state_color_idx = {STATE_ABBR.get(s, s[:2]): i + 1 for i, s in enumerate(active_state_list)}
+n_active = len(active_state_list)
+
 z_vals = []
 hover_texts = []
 for abbr in ALL_US_STATES:
     if abbr in active_abbrs:
         full = ABBR_TO_STATE.get(abbr, abbr)
         n = stats["state_counts"].get(full, 0)
-        z_vals.append(1)
+        z_vals.append(state_color_idx.get(abbr, 1))
         hover_texts.append(f"<b>{full}</b><br>{n:,} respondents<br><i>Click below to view report</i>")
     else:
         z_vals.append(0)
         hover_texts.append(f"{abbr}")
 
+# Build a colorscale with distinct colors per active state
+# Index 0 = inactive (light grey), then one color per active state
+_distinct_colors = ["#E8E4DC"]  # index 0 = inactive
+for s in active_state_list:
+    _distinct_colors.append(STATE_COLORS.get(s, NAVY))
+
+# Build Plotly colorscale as normalized [position, color] pairs
+if n_active > 0:
+    _cscale = [[0, "#E8E4DC"]]
+    for i, color in enumerate(_distinct_colors[1:], 1):
+        pos = i / n_active
+        prev_pos = (i - 1) / n_active + 0.001 if i > 1 else 0.001
+        _cscale.append([prev_pos, color])
+        _cscale.append([pos, color])
+    # Ensure we end at 1.0
+    if _cscale[-1][0] != 1.0:
+        _cscale[-1][0] = 1.0
+else:
+    _cscale = [[0, "#E8E4DC"], [1, "#E8E4DC"]]
+
 fig_map = go.Figure(data=go.Choropleth(
     locations=ALL_US_STATES,
     z=z_vals,
     locationmode="USA-states",
-    colorscale=[[0, "#E8E4DC"], [0.49, "#E8E4DC"], [0.51, "#0E1F3D"], [1, "#0E1F3D"]],
+    colorscale=_cscale,
+    zmin=0,
+    zmax=n_active if n_active > 0 else 1,
     showscale=False,
     hovertext=hover_texts,
     hoverinfo="text",

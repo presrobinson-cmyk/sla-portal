@@ -78,7 +78,7 @@ SURVEY_STATE = {
 TIER_MAP = {
     "PD_FUNDING": "Entry", "INVEST": "Entry", "LIT": "Entry",
     "COUNSEL_ACCESS": "Entry (VA)",
-    "DV": "Bridge", "CAND-DV": "Bridge",
+    "DV": "Entry", "CAND-DV": "Bridge",
     "PROP": "Downstream", "REDEMPTION": "Downstream",
     "EXPUNGE": "Downstream", "SENTREVIEW": "Downstream",
     "JUDICIAL": "Downstream", "RETRO": "Downstream",

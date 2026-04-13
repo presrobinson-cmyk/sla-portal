@@ -42,3 +42,8 @@ icon = "✏️"
 path = "pages/7_AI_Analysis.py"
 name = "AI Analysis"
 icon = "🤖"
+
+[[pages]]
+path = "pages/9_Methodology.py"
+name = "Methodology"
+icon = "📐"

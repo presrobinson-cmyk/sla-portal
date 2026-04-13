@@ -115,6 +115,4 @@ st.info(
     icon="ℹ️"
 )
 
-render_chat("surveymaker")
-
 portal_footer()
