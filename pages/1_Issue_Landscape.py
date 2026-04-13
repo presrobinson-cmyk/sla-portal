@@ -261,7 +261,10 @@ def aggregate_to_topics(question_data):
 
     for qid, qd in question_data.items():
         construct = qd["construct"]
-        if not construct or construct in GAUGE_CONSTRUCTS:
+        # TIER_MAP is the authoritative whitelist — only constructs with an assigned tier
+        # appear in the landscape. This blocks screeners, ballot tests, and any other
+        # QID whose construct leaked through without a tier assignment.
+        if not construct or construct in GAUGE_CONSTRUCTS or construct not in TIER_MAP:
             continue
 
         overall_pct = qd["overall_support"]
@@ -481,8 +484,8 @@ if view_mode == "Consensus Gauge":
         "Hover for details; select a topic below to explore individual survey questions."
     )
 
-    # Sort by overall support descending
-    gauge_data = filtered.sort_values("overall_support", ascending=True)
+    # Sort descending — highest support at top of chart (autorange="reversed" renders first item at top)
+    gauge_data = filtered.sort_values("overall_support", ascending=False)
 
     # Build the horizontal bar chart
     fig_gauge = go.Figure()
@@ -965,12 +968,17 @@ elif view_mode == "MPT View":
         size="n_states",
         size_max=20,
         opacity=0.88,
+        text="topic",
         labels={
             "reach": "MrP Reach %",
             "universality": "MrP Universality",
             "quadrant": "Quadrant",
         },
         custom_data=["topic", "tier", "n_states"],
+    )
+    fig_mpt.update_traces(
+        textposition="top center",
+        textfont=dict(size=9, family="DM Sans", color="#1E3A5F"),
     )
 
     # Override hover to use our custom text
