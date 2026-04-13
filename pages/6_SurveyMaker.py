@@ -152,7 +152,7 @@ data_mode = render_data_source_toggle()
 data_source_badge(data_mode)
 
 st.markdown(
-    "Browse scored questions from the question bank · filter by topic and persuasion tier · assemble surveys"
+    "Build surveys from a scored question library · start with the behavioral and demographic foundation · add policy questions by topic"
 )
 
 st.divider()
@@ -173,19 +173,16 @@ if questions_df.empty:
 # SIDEBAR FILTERS
 # ─────────────────────────────────────────────────────────────────
 
-st.sidebar.markdown("### Question Bank Filters")
+st.sidebar.markdown("### Policy Question Filters")
+st.sidebar.caption("The behavioral and demographic batteries are fixed starting blocks — use the filters below to select your policy questions.")
 
-# Topic filter
+# Topic filter — full names only, no abbreviations
 available_topics = sorted(questions_df['topic_label'].unique())
 selected_topics = st.sidebar.multiselect(
     "Topic",
     available_topics,
     default=available_topics[:5] if len(available_topics) > 5 else available_topics
 )
-
-# Tier filter
-tier_options = ["All", "Entry", "Bridge", "Downstream", "Destination"]
-selected_tier = st.sidebar.selectbox("Persuasion Tier", tier_options, index=0)
 
 # Support level filter
 support_options = [
@@ -196,14 +193,17 @@ support_options = [
 ]
 selected_support = st.sidebar.selectbox("Support Level", support_options, index=0)
 
-# Sort options
+# Sort options — no internal jargon
 sort_options = [
     "Support % (descending)",
     "Support % (ascending)",
     "Topic (A-Z)",
-    "Tier (Entry → Destination)"
+    "Message Readiness (broadest first)",
 ]
 selected_sort = st.sidebar.selectbox("Sort By", sort_options, index=0)
+
+# Keep tier for internal filtering logic but don't expose it as a user-facing option
+selected_tier = "All"
 
 # ─────────────────────────────────────────────────────────────────
 # APPLY FILTERS
@@ -234,19 +234,122 @@ elif selected_sort == "Support % (ascending)":
     filtered_df = filtered_df.sort_values('overall_support', ascending=True)
 elif selected_sort == "Topic (A-Z)":
     filtered_df = filtered_df.sort_values('topic_label')
-elif selected_sort == "Tier (Entry → Destination)":
+elif selected_sort == "Message Readiness (broadest first)":
     tier_order = {"Entry": 1, "Bridge": 2, "Downstream": 3, "Destination": 4, "Unclassified": 5}
     filtered_df['tier_order'] = filtered_df['tier'].map(tier_order)
-    filtered_df = filtered_df.sort_values('tier_order').drop('tier_order', axis=1)
+    filtered_df = filtered_df.sort_values(['tier_order', 'overall_support'], ascending=[True, False]).drop('tier_order', axis=1)
 
 # ─────────────────────────────────────────────────────────────────
 # QUESTION BROWSER
 # ─────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────
+# STANDARD SURVEY STRUCTURE — BEHAVIORAL + DEMOGRAPHIC BATTERIES
+# ─────────────────────────────────────────────────────────────────
+
+st.markdown("### Standard Survey Structure")
+st.markdown(
+    "Every survey includes two fixed blocks before policy questions. "
+    "These are not optional — behavioral and demographic data are what make the policy questions interpretable."
+)
+
+bat_col1, bat_col2 = st.columns(2)
+
+with bat_col1:
+    with st.expander("🧭 Behavioral Battery (include in every survey)", expanded=False):
+        st.markdown(f"""
+<div style="font-size:0.83rem;color:{TEXT2};line-height:1.6;">
+<strong>Why this matters:</strong> Behavioral past-action questions reveal intensity and salience — not just what
+people think, but whether they care enough to act. Someone who has spoken to a neighbor about
+criminal justice reform is a different kind of respondent than someone who holds the same stated
+opinion but has never engaged. Behavioral data predicts who will show up, who can be organized, and who
+will persuade others in their network.
+<br><br>
+<strong>Rule: every question asks what they HAVE done, not what they would do.</strong>
+Aspirational-intent questions ("Would you contact an official?") inflate estimates
+and measure nothing actionable.
+</div>
+""", unsafe_allow_html=True)
+        st.markdown("")
+        behavioral_questions = [
+            ("B1", "In the past 12 months, have you spoken with a friend, family member, or neighbor about the criminal justice system?",
+             "Yes / No", "Measures social salience — who is already talking about this. High yes-rate = issue has organic reach."),
+            ("B2", "Have you or anyone close to you ever been arrested, charged, or incarcerated?",
+             "Yes / No", "Personal experience predictor. Experience = higher intensity, higher persuadability on reform."),
+            ("B3", "Have you ever contacted a state or local elected official about any issue related to criminal justice or public safety?",
+             "Yes / No", "Civic engagement baseline. Separates passive holders from active advocates."),
+            ("B4", "In the past 12 months, have you shared news or information about criminal justice on social media or via text?",
+             "Yes / No", "Network diffusion potential. These are your organic amplifiers."),
+            ("B5", "Have you ever attended a community meeting, town hall, or public event focused on criminal justice or public safety?",
+             "Yes / No", "Organizational engagement indicator. High yes-rate = organized community, not just sympathetic one."),
+            ("B6", "Do you personally know anyone who is currently serving a prison or jail sentence?",
+             "Yes / No", "Proximity indicator. Strongest driver of attitude change and behavioral engagement on CJ issues."),
+            ("B7", "Have you ever served as a juror in a criminal case?",
+             "Yes / No", "First-hand system exposure. Jurors have visceral system knowledge — frames their reading of reform questions."),
+            ("B8", "How likely are you, in the next 12 months, to take action on criminal justice issues — such as signing a petition, attending a meeting, contacting an official, or voting specifically on this issue?",
+             "Very likely / Somewhat likely / Somewhat unlikely / Very unlikely",
+             "Forward behavioral intention. Combined with B1-B7, identifies your top persuasion and mobilization targets."),
+        ]
+        for code, text, scale, rationale in behavioral_questions:
+            st.markdown(f"""
+<div style="background:rgba(14,31,61,0.03);border-left:3px solid {NAVY2};border-radius:6px;
+     padding:0.5rem 0.75rem;margin-bottom:8px;">
+<div style="font-size:0.78rem;font-weight:700;color:{NAVY};">{code}: {text}</div>
+<div style="font-size:0.72rem;color:{TEXT3};margin-top:2px;">Scale: {scale}</div>
+<div style="font-size:0.74rem;color:{TEXT2};margin-top:4px;font-style:italic;">{rationale}</div>
+</div>
+""", unsafe_allow_html=True)
+
+with bat_col2:
+    with st.expander("📊 Demographic Battery (standard weighting variables)", expanded=False):
+        st.markdown(f"""
+<div style="font-size:0.83rem;color:{TEXT2};line-height:1.6;">
+<strong>Why this matters:</strong> Demographics make MrP (Multilevel Regression with Poststratification) possible.
+Without them, you can't weight results to population targets, and you can't disaggregate findings by
+subgroup. Every variable below serves double duty: it's a weighting variable AND an analysis dimension.
+<br><br>
+<strong>Standard = required. Optional = add only when needed for specific research goals.</strong>
+</div>
+""", unsafe_allow_html=True)
+        st.markdown("")
+        demo_standard = [
+            ("D1", "Age", "18–29 / 30–44 / 45–64 / 65 or older", "Standard"),
+            ("D2", "Gender", "Man / Woman / Non-binary or gender non-conforming / Prefer not to say", "Standard"),
+            ("D3", "Race / Ethnicity", "White (non-Hispanic) / Black or African American / Hispanic or Latino / Asian or Pacific Islander / Mixed race or multiracial / Other / Prefer not to say", "Standard"),
+            ("D4", "Education", "Less than high school / High school diploma or GED / Some college / Bachelor's degree / Graduate or professional degree", "Standard"),
+            ("D5", "Household income (approximate)", "Under $30,000 / $30,000–$50,000 / $50,000–$75,000 / $75,000–$100,000 / Over $100,000 / Prefer not to say", "Standard"),
+            ("D6", "Political party", "Republican / Democrat / Independent / Another party / No affiliation", "Standard"),
+            ("D7", "Political ideology", "Very conservative / Somewhat conservative / Moderate / Somewhat liberal / Very liberal", "Standard"),
+            ("D8", "Area type", "Urban (large city) / Suburban / Small town / Rural", "Standard"),
+            ("D9", "State of residence", "[Dropdown by state]", "Standard"),
+            ("D10", "Employment status", "Employed full-time / Part-time / Self-employed / Retired / Student / Unemployed or looking / Not in workforce", "Optional"),
+            ("D11", "Union household", "Yes, I or someone in my household is a union member / No", "Optional"),
+            ("D12", "Religious service attendance", "Weekly or more / Monthly / A few times per year / Rarely or never", "Optional — adds predictive power for DV, compassion, redemption constructs"),
+        ]
+        for code, label, options, flag in demo_standard:
+            flag_color = "#1B6B3A" if flag == "Standard" else "#B8870A"
+            flag_bg = "rgba(27,107,58,0.08)" if flag == "Standard" else "rgba(184,135,10,0.08)"
+            st.markdown(f"""
+<div style="background:{flag_bg};border-left:3px solid {flag_color};border-radius:6px;
+     padding:0.45rem 0.75rem;margin-bottom:7px;">
+<div style="display:flex;justify-content:space-between;align-items:center;">
+    <span style="font-size:0.78rem;font-weight:700;color:{NAVY};">{code}: {label}</span>
+    <span style="font-size:0.68rem;color:{flag_color};font-weight:600;">{flag}</span>
+</div>
+<div style="font-size:0.71rem;color:{TEXT2};margin-top:3px;">{options}</div>
+</div>
+""", unsafe_allow_html=True)
+
+st.divider()
+
+# ─────────────────────────────────────────────────────────────────
+# POLICY QUESTION BROWSER
+# ─────────────────────────────────────────────────────────────────
+
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.markdown("### Question Bank Browser")
+    st.markdown("### Policy Question Library")
     st.markdown(f"**{len(filtered_df)} questions** matching filters")
 
     if filtered_df.empty:
@@ -443,13 +546,114 @@ st.markdown("")
 st.divider()
 
 # ─────────────────────────────────────────────────────────────────
-# PERSUASION PATHWAY SEQUENCING
+# ACTION CONVERSION — what does the data tell you to do?
 # ─────────────────────────────────────────────────────────────────
 
-st.markdown("### Persuasion Pathway Sequencing")
+st.markdown("### What Does This Data Tell You to Do?")
 st.markdown(
-    "The pathway matters. Entry topics build common ground, Bridge topics open skeptics, "
-    "Downstream topics close on specific policy positions. Survey questions should flow in this order.",
+    "Survey data is only useful if it changes what you do next. "
+    "Here's how to read the support profile and translate it into campaign strategy."
+)
+
+# Compute profiles from filtered data
+if not filtered_df.empty:
+    avg_support = filtered_df['overall_support'].mean()
+    n_high = (filtered_df['overall_support'] >= 75).sum()
+    n_contested = (filtered_df['overall_support'] < 55).sum()
+    n_total = len(filtered_df)
+
+    tier_counts = filtered_df['tier'].value_counts()
+    n_entry = tier_counts.get("Entry", 0) + tier_counts.get("Entry (VA)", 0)
+    n_bridge = tier_counts.get("Bridge", 0)
+    n_downstream = tier_counts.get("Downstream", 0)
+
+    action_rows = []
+
+    # High bipartisan consensus → broad campaign
+    if n_high >= 3 and avg_support >= 70:
+        action_rows.append({
+            "signal": "✅ Broad Campaign Ready",
+            "color": "#1B6B3A",
+            "bg": "rgba(27,107,58,0.07)",
+            "explanation": f"{n_high} of {n_total} selected questions hit 75%+ support. "
+                           "These messages are safe to run broadly — no need to segment by party. "
+                           "The creative challenge is differentiation, not persuasion.",
+            "action": "Run a general-public campaign. Use bipartisan spokespeople. "
+                      "Don't over-target — that narrows your coalition unnecessarily."
+        })
+
+    # Heavy downstream / no entry → sequencing problem
+    if n_downstream > n_entry + n_bridge:
+        action_rows.append({
+            "signal": "⚠️ Sequencing Gap",
+            "color": "#B85500",
+            "bg": "rgba(184,85,0,0.07)",
+            "explanation": f"Your selection is heavy on specific policy positions ({n_downstream} questions) "
+                           f"but light on the common-ground topics ({n_entry}) that make voters open to hearing them. "
+                           "Policy positions land harder after trust is established.",
+            "action": "Add broader trust-building questions first. Survey sequencing matters — "
+                      "it mirrors the persuasion order of a real conversation."
+        })
+
+    # High contested count → reframe before deploy
+    if n_contested >= 3:
+        action_rows.append({
+            "signal": "🔴 Reframe Before Fielding",
+            "color": "#8B1A1A",
+            "bg": "rgba(139,26,26,0.07)",
+            "explanation": f"{n_contested} questions are in contested territory (<55% support). "
+                           "Fielding these without established trust first will produce discouraging numbers "
+                           "that undercount your actual persuadable universe.",
+            "action": "Run trust-establishing questions first in your survey. Or use these contested "
+                      "items to identify where reframing is needed before campaign deployment."
+        })
+
+    # Entry-heavy → good for diagnostic / readiness survey
+    if n_entry >= 4:
+        action_rows.append({
+            "signal": "📊 Diagnostic Survey Profile",
+            "color": "#1155AA",
+            "bg": "rgba(17,85,170,0.07)",
+            "explanation": f"Your selection is weighted toward common-ground topics ({n_entry} questions). "
+                           "This is a good diagnostic profile — ideal for mapping the persuadable landscape "
+                           "before committing to specific policy messaging.",
+            "action": "Use this survey to identify which door-opening topics resonate most in your specific "
+                      "state or district before moving to policy-specific messaging."
+        })
+
+    # Behavioral battery reminder
+    action_rows.append({
+        "signal": "🧭 Cross with Behavioral Data",
+        "color": NAVY2,
+        "bg": "rgba(14,31,61,0.05)",
+        "explanation": "Support rates tell you the position. Behavioral battery questions tell you the intensity "
+                       "and organizational reach. The highest-value targets are voters who agree AND have "
+                       "already engaged — they're more likely to spread the message in their networks.",
+        "action": "Cross-tab your policy support rates with B2 (personal experience), B6 (knows someone incarcerated), "
+                  "and B8 (forward intent). These are your most persuadable AND most activatable voters."
+    })
+
+    for row in action_rows:
+        st.markdown(f"""
+<div style="background:{row['bg']};border-left:4px solid {row['color']};border-radius:8px;
+     padding:0.75rem 1rem;margin-bottom:10px;">
+<div style="font-weight:700;color:{row['color']};font-size:0.88rem;margin-bottom:4px;">{row['signal']}</div>
+<div style="font-size:0.82rem;color:{TEXT2};line-height:1.5;margin-bottom:6px;">{row['explanation']}</div>
+<div style="font-size:0.79rem;color:{TEXT1};font-weight:600;">→ {row['action']}</div>
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("")
+st.divider()
+
+# ─────────────────────────────────────────────────────────────────
+# SURVEY SEQUENCE — plain language ordering guide
+# ─────────────────────────────────────────────────────────────────
+
+st.markdown("### Survey Question Order")
+st.markdown(
+    "Question order matters — it primes the respondent. This sequence maximizes data quality "
+    "and mirrors the persuasion logic: establish common ground before asking about contested positions.",
 )
 
 # Tier definitions for pathway display
@@ -857,30 +1061,59 @@ st.info("Full survey assembly tools (export, skip logic, randomization) coming i
 # METHODOLOGY GUIDANCE
 # ─────────────────────────────────────────────────────────────────
 
-with st.expander("Question Design Methodology", expanded=False):
+with st.expander("📐 How to write questions that actually measure what you think they measure", expanded=False):
     st.markdown(f"""
-    #### Behavioral Past-Action
-    Questions should ask what people **have done**, not what they would do. Behavioral items measure real participation patterns.
+<div style="font-size:0.84rem;color:{TEXT2};line-height:1.7;">
 
-    **Good:** "In the past year, have you contacted an elected official?"
-    **Bad:** "Would you contact an elected official if you were concerned about a policy?"
+<strong style="font-size:0.95rem;color:{NAVY};">The core problem: stated opinion ≠ what people will do.</strong><br>
+Most survey questions measure where someone stands. That's useful — but it doesn't tell you how hard they'll fight,
+who they'll tell, or whether they'll still agree after hearing the other side.
+Behavioral questions close that gap. They reveal intensity, not just position.
 
-    #### Avoid Knowledge Tests
-    Don't ask respondents to recall facts or demonstrate expertise. Knowledge tests increase drop-off and contaminate support measurements. Respondents disengage or guess.
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
 
-    #### Minimize Burden
-    Keep surveys under 12 minutes. Each additional minute costs ~3% completion rate. Shorter surveys yield higher quality responses.
+<strong>Rule 1 — Ask what people have done, not what they would do.</strong><br>
+Past action is a fact. Future intent is a wish. "Would you contact an elected official?" gets you optimism.
+"Have you contacted an elected official in the past year?" gets you activists.<br><br>
+<em>✓ "In the past 12 months, have you discussed criminal justice with someone outside your household?"</em><br>
+<em>✗ "How likely are you to discuss criminal justice with others?"</em>
 
-    **Burden checklist:**
-    - Max 15 core substantive questions
-    - Use matrix questions efficiently
-    - Skip open-ended text (high abandonment)
-    - Test in pilot (aim for <90 sec per question)
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
 
-    #### Test for Durability
-    Include counter-arguments to see if support holds under attack. Questions with weak persuasion margins collapse under messaging pressure.
+<strong>Rule 2 — Single idea per question. Double-barreled questions hide the answer.</strong><br>
+"Do you support reforming sentencing and releasing nonviolent offenders?" — support for what?
+Agreement on both parts? One part? Respondents average their answer and you learn nothing precise.<br><br>
+<em>✓ Split it: (a) "Do you support reducing sentences for nonviolent offenses?" and separately
+(b) "Do you support early release for people who complete rehabilitation programs?"</em>
 
-    **Example durability test:** Ask original support, then present strongest opposing argument, then re-ask.
-    """)
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
+
+<strong>Rule 3 — Measure proximity, not just opinion.</strong><br>
+"Do you support second-chance hiring?" gets you a position. "Do you personally know someone with a criminal record
+who has had trouble finding work?" gets you salience and network reach. Someone who knows someone will talk.
+Someone who only has an opinion may not. Both matter — they're measuring different things.
+
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
+
+<strong>Rule 4 — No knowledge tests. Ever.</strong><br>
+Asking respondents to recall facts or demonstrate expertise measures education and media consumption — not support.
+It introduces dropout (people who don't know disengage), contaminates your support scores, and tells you nothing
+useful about persuasion. Replace knowledge questions with context statements: give them the fact, then ask how it
+affects their view.
+
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
+
+<strong>Rule 5 — Test durability with inoculation.</strong><br>
+Strong support that collapses under a single counterargument isn't actually strong. Before using a message in paid
+media, field a durability test: ask baseline support, present the most credible opposing argument, re-ask.
+The gap between pre and post is your exposure risk. If it moves more than 8 points, you need to inoculate first.
+
+<hr style="border:none;border-top:1px solid {BORDER2};margin:0.75rem 0;">
+
+<strong>Burden rule of thumb:</strong> Under 12 minutes. Max 15 substantive questions.
+Each additional minute costs roughly 3% completion — quality degrades before abandonment does.
+
+</div>
+""", unsafe_allow_html=True)
 
 portal_footer()

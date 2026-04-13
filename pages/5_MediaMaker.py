@@ -38,6 +38,18 @@ try:
     SCORING_AVAILABLE = True
 except ImportError:
     SCORING_AVAILABLE = False
+
+try:
+    from script_generator import build_prompt, generate_script, flag_rule_violations, FORMAT_WORD_COUNTS
+    GENERATOR_AVAILABLE = True
+except ImportError:
+    GENERATOR_AVAILABLE = False
+
+try:
+    import anthropic as _anthropic_module
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
     def get_construct(qid):
         return None
     SKIPPED_QIDS = set()
@@ -1240,218 +1252,220 @@ if selected_reg_code and selected_reg:
     st.divider()
 
 # ─────────────────────────────────────────────────────────────────
-# STEP 6: SOURCE MATERIALS (was Step 4)
+# STEP 6: GENERATE SCRIPT — inline via Anthropic API
 # ─────────────────────────────────────────────────────────────────
 
-st.markdown("### Step 6: Add Your Source Materials")
-st.caption(
-    "Drop in a bill, news article, or list of spokespeople to tailor your messaging. "
-    "The AI will combine your inputs with the polling data above to generate sharper communications."
-)
+st.markdown("### Step 6: Generate Your Script")
 
-input_col1, input_col2 = st.columns(2)
+# ── Audience selector (needed for generation prompt) ──────────────
+audience_options = [
+    "General public",
+    "Republican persuadables",
+    "Democratic base (mobilization)",
+    "Independent / swing voters",
+    "State legislators",
+    "Local media / editorial boards",
+    "Grassroots advocates / organizers",
+    "Donors and funders",
+]
+suggested = get_dynamic_audience(selected_construct, construct_summaries)
+is_live_suggestion = selected_construct in construct_summaries
+suggested_idx = audience_options.index(suggested) if suggested in audience_options else 0
+rationale = AUDIENCE_RATIONALE.get(suggested, "")
 
-with input_col1:
-    st.markdown(f"""
-    <div style="font-weight:600;color:{NAVY};margin-bottom:0.5rem;">📄 Bill Text or Policy Document</div>
-    """, unsafe_allow_html=True)
-    bill_text = st.text_area(
-        "Paste bill text, executive summary, or key provisions",
-        height=150,
-        placeholder="e.g. HB 1234 — Amends §18.2-308.1 to require judicial review of sentences exceeding 20 years...",
-        key="mm_bill_text",
-    )
+aud_col, src_col = st.columns([1, 2])
 
-    st.markdown(f"""
-    <div style="font-weight:600;color:{NAVY};margin-bottom:0.5rem;margin-top:1rem;">🔗 News Links</div>
-    """, unsafe_allow_html=True)
-    news_links = st.text_area(
-        "Paste URLs to relevant news articles, one per line",
-        height=100,
-        placeholder="https://apnews.com/article/sentencing-reform-2026...\nhttps://localnews.com/bail-reform-passes-committee...",
-        key="mm_news_links",
-    )
-
-with input_col2:
-    st.markdown(f"""
-    <div style="font-weight:600;color:{NAVY};margin-bottom:0.5rem;">🎤 Spokespeople & Assets</div>
-    """, unsafe_allow_html=True)
-    assets_text = st.text_area(
-        "List people available for ads, quotes, or testimonials (name, role, why they matter)",
-        height=150,
-        placeholder="e.g.\n• James Wilson — formerly incarcerated, now runs a reentry nonprofit\n• Sheriff Maria Torres — Republican sheriff, supports bail reform\n• Dr. Amari Johnson — criminologist at State U, publishes on recidivism",
-        key="mm_assets",
-    )
-
-    st.markdown(f"""
-    <div style="font-weight:600;color:{NAVY};margin-bottom:0.5rem;margin-top:1rem;">🎯 Target Audience</div>
-    """, unsafe_allow_html=True)
-
-    audience_options = [
-        "General public",
-        "Republican persuadables",
-        "Democratic base (mobilization)",
-        "Independent / swing voters",
-        "State legislators",
-        "Local media / editorial boards",
-        "Grassroots advocates / organizers",
-        "Donors and funders",
-    ]
-
-    # Dynamic audience from live party splits
-    suggested = get_dynamic_audience(selected_construct, construct_summaries)
-    is_live_suggestion = selected_construct in construct_summaries
-    suggested_idx = audience_options.index(suggested) if suggested in audience_options else 0
-    rationale = AUDIENCE_RATIONALE.get(suggested, "")
-
+with aud_col:
     audience = st.selectbox(
-        "Who is this communication for?",
+        "Target audience",
         audience_options,
         index=suggested_idx,
         key="mm_audience",
     )
-
-    # Show party split detail if available
     if is_live_suggestion and r_pct is not None and d_pct is not None:
         gap = d_pct - r_pct
-        gap_str = f"+{round(abs(gap))}% D" if gap > 0 else f"+{round(abs(gap))}% R"
-        st.markdown(f"""
-        <div style="font-size:0.78rem;color:{TEXT3};margin-top:-0.5rem;padding:0.4rem 0.75rem;
-             background:rgba(14,31,61,0.04);border-radius:6px;">
-            💡 <strong>Live data suggests: {suggested}</strong> &nbsp;·&nbsp;
-            R: {round(r_pct)}% &nbsp;·&nbsp; D: {round(d_pct)}% &nbsp;·&nbsp; Gap: {gap_str}
-            {f"&nbsp;·&nbsp; {rationale}" if rationale else ""}
-        </div>
-        """, unsafe_allow_html=True)
-    elif rationale:
-        st.markdown(f"""
-        <div style="font-size:0.78rem;color:{TEXT3};margin-top:-0.5rem;padding:0.3rem 0.5rem;
-             background:rgba(14,31,61,0.04);border-radius:6px;">
-            💡 <strong>Suggested for {selected_label}:</strong> {rationale}
-        </div>
-        """, unsafe_allow_html=True)
-
-    output_format = st.selectbox(
-        "Output format",
-        [
-            "Social media post (short)",
-            "Op-ed / letter to editor",
-            "30-second ad script",
-            "60-second radio script",
-            "Door-knock talking points",
-            "Email to legislator",
-            "Press release",
-            "Fundraising email",
-        ],
-        key="mm_format",
-    )
-
-# ─────────────────────────────────────────────────────────────────
-# GENERATE BUTTON
-# ─────────────────────────────────────────────────────────────────
-
-st.markdown("")
-has_inputs = bool(bill_text.strip() or news_links.strip() or assets_text.strip())
-
-if has_inputs:
-    generate_btn = st.button("📢 Generate Message Brief", type="primary", key="mm_generate")
-
-    if generate_btn:
-        context_parts = []
-
-        # Topic + tier
-        context_parts.append(f"TOPIC: {CONSTRUCT_LABELS.get(selected_construct, selected_construct)}")
-        context_parts.append(f"PERSUASION TIER: {selected_tier}")
-
-        # Creative system context
-        if selected_reg_code and selected_reg:
-            context_parts.append(f"FORMAT: {selected_format}")
-            context_parts.append(f"REGISTER: {selected_reg.get('name', selected_reg_code)}")
-            r1v_brief = get_rule1_variant(selected_reg_code)
-            if r1v_brief:
-                context_parts.append(f"RULE 1 VARIANT: {r1v_brief.get('name', '')}")
-            req_moves = selected_reg.get("required_moves", [])
-            if req_moves:
-                context_parts.append(f"REQUIRED STRUCTURAL MOVES: {', '.join(req_moves)}")
-            # Key rules reminder
-            context_parts.append(
-                "SIGNATURE RULES: (1) Concession-First open | (2) B-roll as evidence | "
-                "(3) Max 7 words per text card | (4) Text card + pause = the move | "
-                "(5) Villain implied, not named | (6) Bookend open/close with deepened meaning"
-            )
-            if selected_format in [FORMAT_TV_30, FORMAT_TV_60, FORMAT_DIGITAL_30]:
-                context_parts.append(
-                    "SILENT TRACK: Text cards must carry the complete argument for muted viewers."
-                )
-        tier_note = TIER_ROLE.get(selected_tier, "")
-        if tier_note:
-            context_parts.append(f"TIER STRATEGY: {tier_note}")
-
-        # Live support numbers
-        if live_pct is not None:
-            pct_type = "MrP-Adjusted" if data_mode == "mrp" else "Raw Survey"
-            context_parts.append(f"OVERALL SUPPORT: {round(live_pct)}% ({pct_type})")
-        if r_pct is not None:
-            context_parts.append(f"REPUBLICAN SUPPORT: {round(r_pct)}%")
-        if d_pct is not None:
-            context_parts.append(f"DEMOCRATIC SUPPORT: {round(d_pct)}%")
-
-        # Live data anchor
-        anchor = get_data_anchor_text(selected_construct, construct_summaries, data_mode)
-        if anchor:
-            context_parts.append(f"DATA ANCHOR: {anchor}")
-
-        # Words map
-        if selected_construct in WORDS_MAP:
-            wm = WORDS_MAP[selected_construct]
-            context_parts.append(f"WORDS THAT WORK: {', '.join(wm['work'])}")
-            context_parts.append(f"WORDS TO AVOID: {', '.join(wm['avoid'])}")
-
-        # Framework guidance
-        if selected_construct in FRAMEWORK_MAP:
-            fm = FRAMEWORK_MAP[selected_construct]
-            context_parts.append(f"STRATEGIC FRAME: {fm['frame']}")
-            context_parts.append(f"INOCULATION: {fm['inoculation']}")
-            context_parts.append(f"CALL TO ACTION: {fm['cta']}")
-
-        # Cross-state context
-        if state_data:
-            sorted_s = sorted(state_data.items(), key=lambda x: x[1], reverse=True)
-            state_str = ", ".join(f"{s} ({round(p)}%)" for s, p in sorted_s)
-            context_parts.append(f"STATE SUPPORT (strongest to weakest): {state_str}")
-
-        # Prereqs + unlocks
-        if prereq_labels:
-            context_parts.append(f"PREREQUISITE TOPICS (build first): {', '.join(prereq_labels)}")
-        if unlock_labels:
-            context_parts.append(f"TOPICS THIS UNLOCKS: {', '.join(unlock_labels)}")
-
-        # User inputs
-        if bill_text.strip():
-            context_parts.append(f"BILL/POLICY TEXT: {bill_text.strip()[:2000]}")
-        if news_links.strip():
-            context_parts.append(f"NEWS LINKS: {news_links.strip()[:500]}")
-        if assets_text.strip():
-            context_parts.append(f"AVAILABLE SPOKESPEOPLE: {assets_text.strip()[:1000]}")
-
-        context_parts.append(f"TARGET AUDIENCE: {audience}")
-        context_parts.append(f"OUTPUT FORMAT: {output_format}")
-
-        st.info(
-            "💡 **Tip**: Copy the brief below and take it to the **AI Analysis** page to generate your message. "
-            "The AI has full access to all the polling data and frameworks."
+        gap_str = f"+{round(abs(gap))}pt D" if gap > 0 else f"+{round(abs(gap))}pt R"
+        st.markdown(
+            f"""<div style="font-size:0.77rem;color:{TEXT3};padding:4px 0;">
+            💡 Live data suggests <strong>{suggested}</strong> &nbsp;·&nbsp;
+            R {round(r_pct)}% · D {round(d_pct)}% · gap {gap_str}</div>""",
+            unsafe_allow_html=True,
         )
 
-        with st.expander("📋 Your message brief (copy to chat)", expanded=True):
-            brief = "\n".join(context_parts)
-            st.code(brief, language=None)
+with src_col:
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        bill_text = st.text_area(
+            "📄 Bill / policy context (optional)",
+            height=120,
+            placeholder="Paste key provisions, background, or bill number...",
+            key="mm_bill_text",
+        )
+    with sc2:
+        assets_text = st.text_area(
+            "🎤 Spokespeople / voices (optional)",
+            height=60,
+            placeholder="Name, role, why they matter...",
+            key="mm_assets",
+        )
+        additional_notes = st.text_area(
+            "📝 Other notes (optional)",
+            height=52,
+            placeholder="State context, client constraints, tone notes...",
+            key="mm_notes",
+        )
+
+st.markdown("")
+
+# ── API key check + generate button ───────────────────────────────
+_api_key = ""
+if ANTHROPIC_AVAILABLE:
+    try:
+        _api_key = st.secrets.get("ANTHROPIC_KEY", "")
+    except Exception:
+        import os
+        _api_key = os.environ.get("ANTHROPIC_KEY", "")
+
+if not selected_reg_code:
+    st.info("Select a format and register in Step 5 to unlock generation.")
+
+elif not GENERATOR_AVAILABLE or not ANTHROPIC_AVAILABLE:
+    st.warning("script_generator.py or anthropic package not found. Check requirements.txt and deploy.")
+
+elif not _api_key:
+    st.warning(
+        "No ANTHROPIC_KEY found in secrets. "
+        "Add it to .streamlit/secrets.toml on the server: `ANTHROPIC_KEY = 'sk-ant-...'`"
+    )
+
 else:
-    st.markdown(f"""
-    <div style="background:rgba(184,135,10,0.08);border:1px dashed {GOLD_MID};border-radius:8px;
-         padding:1rem 1.25rem;text-align:center;color:{TEXT2};">
-        Add a bill, news link, or spokesperson list above to generate tailored messages.
-    </div>
-    """, unsafe_allow_html=True)
+    # Show what will be generated
+    word_limit = FORMAT_WORD_COUNTS.get(selected_format, 150)
+    st.markdown(
+        f"""<div style="font-size:0.82rem;color:{TEXT3};margin-bottom:0.75rem;">
+        Generating a <strong>{selected_format}</strong> script in the
+        <strong>{selected_reg.get('name', selected_reg_code)}</strong> register
+        ({word_limit}-word audio limit) for <strong>{selected_label}</strong>.
+        Audience: <strong>{audience}</strong>.
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+    gen_btn = st.button(
+        "✍️ Generate Script",
+        type="primary",
+        key="mm_generate",
+        help=f"Calls claude-opus-4-6 with the full creative system prompt — {selected_format} · {selected_reg.get('name', '')}",
+    )
+
+    if gen_btn or "mm_last_script" in st.session_state:
+        # ── Build prompt if generate was just clicked ──────────────
+        if gen_btn:
+            st.session_state.pop("mm_last_script", None)
+            st.session_state.pop("mm_last_warnings", None)
+
+            anchor = get_data_anchor_text(selected_construct, construct_summaries, data_mode)
+            fm = FRAMEWORK_MAP.get(selected_construct, {})
+            wm = WORDS_MAP.get(selected_construct, {})
+            r1v = get_rule1_variant(selected_reg_code)
+            r1_name = r1v.get("name", "") if r1v else ""
+            r1_desc = RULE1_VARIANTS.get(r1_name, {}).get("description", "") if r1_name else ""
+
+            prompt = build_prompt(
+                topic_label=selected_label,
+                construct=selected_construct,
+                tier=selected_tier,
+                tier_role=TIER_ROLE.get(selected_tier, ""),
+                selected_format=selected_format,
+                reg_name=selected_reg.get("name", selected_reg_code),
+                reg_description=selected_reg.get("description", ""),
+                reg_characteristics=selected_reg.get("defining_characteristics", []),
+                req_moves=selected_reg.get("required_moves", []),
+                opt_moves=selected_reg.get("optional_moves", []),
+                r1_name=r1_name,
+                r1_desc=r1_desc,
+                anchor_text=anchor or "",
+                audience=audience,
+                audience_rationale=rationale,
+                live_pct=live_pct,
+                r_pct=r_pct,
+                d_pct=d_pct,
+                words_work=wm.get("work", []),
+                words_avoid=wm.get("avoid", []),
+                frame=fm.get("frame", ""),
+                inoculation=fm.get("inoculation", ""),
+                cta=fm.get("cta", ""),
+                state_data=state_data if "state_data" in dir() else {},
+                bill_text=bill_text,
+                assets_text=assets_text,
+                additional_notes=additional_notes,
+                structural_moves=STRUCTURAL_MOVES,
+                rules=RULES,
+                principles=PRINCIPLES,
+                production_doctrine=PRODUCTION_DOCTRINE,
+            )
+
+            with st.spinner(f"Writing your {selected_format} script… (this takes 15-30 seconds)"):
+                script_text, error = generate_script(prompt, _api_key)
+
+            if error:
+                st.error(f"Generation failed: {error}")
+            else:
+                warnings = flag_rule_violations(script_text, word_limit, selected_format)
+                st.session_state["mm_last_script"] = script_text
+                st.session_state["mm_last_warnings"] = warnings
+                st.session_state["mm_last_topic"] = selected_label
+                st.session_state["mm_last_format"] = selected_format
+                st.session_state["mm_last_reg"] = selected_reg.get("name", selected_reg_code)
+
+        # ── Display last generated script ──────────────────────────
+        if "mm_last_script" in st.session_state:
+            script_text = st.session_state["mm_last_script"]
+            warnings = st.session_state.get("mm_last_warnings", [])
+            last_topic = st.session_state.get("mm_last_topic", selected_label)
+            last_format = st.session_state.get("mm_last_format", selected_format)
+            last_reg = st.session_state.get("mm_last_reg", "")
+
+            st.markdown(
+                f"""<div style="font-weight:700;color:{NAVY};font-size:1rem;margin-bottom:0.5rem;">
+                Generated Script — {last_format} · {last_reg} · {last_topic}
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            # Rule violation warnings
+            if warnings:
+                for w in warnings:
+                    st.warning(w)
+
+            # Script display
+            st.markdown(
+                f"""<div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {GOLD};
+                border-radius:10px;padding:1.1rem 1.4rem;margin-bottom:0.75rem;
+                font-family:monospace;font-size:0.84rem;line-height:1.75;
+                color:{TEXT1};white-space:pre-wrap;">{script_text}</div>""",
+                unsafe_allow_html=True,
+            )
+
+            # Copy / regenerate row
+            btn_c1, btn_c2, btn_c3 = st.columns([2, 1, 1])
+            with btn_c1:
+                st.code(script_text, language=None)
+            with btn_c2:
+                if st.button("🔄 Regenerate", key="mm_regen"):
+                    st.session_state.pop("mm_last_script", None)
+                    st.rerun()
+            with btn_c3:
+                if st.button("🗑 Clear", key="mm_clear"):
+                    for k in ["mm_last_script", "mm_last_warnings", "mm_last_topic",
+                              "mm_last_format", "mm_last_reg"]:
+                        st.session_state.pop(k, None)
+                    st.rerun()
+
+            st.caption(
+                "Script generated using claude-opus-4-6 with the full Actionable Intel creative system. "
+                "Review Rule Check section for any flagged issues before sending to production."
+            )
 
 st.markdown("")
 st.divider()

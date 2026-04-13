@@ -274,30 +274,53 @@ if not topic_matrix:
     st.warning("Not enough multi-state data available yet.")
     st.stop()
 
-# KPI row — custom HTML to avoid column truncation
+# ── VIP EXPLANATION ────────────────────────────────────────────────
+total_respondents = sum(state_counts.values())
+
+st.markdown(f"""
+<div style="background:rgba(14,31,61,0.04);border:1px solid {BORDER2};border-left:4px solid {NAVY};border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;">
+<div style="font-weight:700;color:{NAVY};font-size:1rem;margin-bottom:0.6rem;">What is the Voter Intelligence Profile?</div>
+<div style="font-size:0.85rem;color:{TEXT2};line-height:1.65;">
+The <strong>VIP</strong> is a scoring system that measures how persuasive each criminal justice reform message is — and with which voters — using MrP-adjusted survey data. Every construct (e.g. <em>Public Defender Funding</em>, <em>Domestic Violence</em>, <em>Proportionality</em>) gets a <strong>support rate</strong>, a <strong>partisan gap</strong>, and a <strong>persuasion tier</strong> that tells you where it sits in the sequencing from broadest agreement to most contested.
+</div>
+<div style="font-size:0.85rem;color:{TEXT2};line-height:1.65;margin-top:0.6rem;">
+<strong>The VIP strengthens with every survey fielded.</strong> Each new state adds respondents to the pooled dataset, sharpening the MrP demographic weights and reducing uncertainty in the estimates. More states also reveal which messages are <em>universal</em> (low spread across states) vs. which need local adaptation — that transferability signal is only visible when you have multiple states to compare. The current {len(all_states)}-state picture ({total_respondents:,} total respondents) already shows meaningful cross-state patterns; each new wave adds precision.
+</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── KPI ROW ────────────────────────────────────────────────────────
+# Note: keep all style attributes on ONE line inside f-strings to avoid
+# Streamlit's HTML parser dropping out of HTML mode on multiline attributes.
 state_abbrs = [STATE_ABBR.get(s, s[:2]) for s in all_states]
-kpi_items = f"""
-<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:0.5rem;">
-    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;
-         padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">
-        <div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">States</div>
-        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{len(all_states)}</div>
-    </div>
-"""
+
+# Build inner card HTML — single-line style attributes throughout
+inner_cards = ""
 for state in all_states:
     abbr = STATE_ABBR.get(state, state[:2])
     count = state_counts.get(state, 0)
     s_color = STATE_COLORS.get(state, NAVY)
-    kpi_items += f"""
-    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-top:3px solid {s_color};
-         border-radius:10px;padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">
-        <div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">{abbr}</div>
-        <div style="font-family:'Playfair Display',serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{count:,}</div>
-        <div style="font-size:0.65rem;color:{TEXT3};">respondents</div>
-    </div>
-"""
-kpi_items += "</div>"
-st.markdown(kpi_items, unsafe_allow_html=True)
+    inner_cards += (
+        f'<div style="background:{CARD_BG};border:1px solid {BORDER2};border-top:3px solid {s_color};border-radius:10px;padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">'
+        f'<div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">{abbr}</div>'
+        f'<div style="font-family:serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{count:,}</div>'
+        f'<div style="font-size:0.65rem;color:{TEXT3};">respondents</div>'
+        f'</div>'
+    )
+
+states_card = (
+    f'<div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;padding:0.75rem 1.25rem;text-align:center;min-width:90px;flex:1;">'
+    f'<div style="font-size:0.7rem;color:{TEXT3};text-transform:uppercase;letter-spacing:0.04em;font-weight:500;">States</div>'
+    f'<div style="font-family:serif;font-size:1.6rem;font-weight:700;color:{NAVY};">{len(all_states)}</div>'
+    f'</div>'
+)
+
+kpi_html = (
+    f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:0.5rem;">'
+    f'{states_card}{inner_cards}'
+    f'</div>'
+)
+st.markdown(kpi_html, unsafe_allow_html=True)
 
 st.divider()
 
