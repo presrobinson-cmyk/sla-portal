@@ -155,16 +155,37 @@ def load_question_data_cached():
 
 # Demographic subgroup options: display label → demo_splits key
 DEMO_SUBGROUPS = {
-    "Republicans":        "r",
-    "Democrats":          "d",
-    "HS or Less":         "hs_or_less",
-    "Some College":       "some_college",
-    "College Educated":   "college_plus",
-    "Ages 18-34":         "m18_34",
-    "Ages 35-54":         "m35_54",
-    "Ages 55+":           "m55plus",
-    "Men":                "male",
-    "Women":              "female",
+    # Party
+    "Republicans":          "r",
+    "Democrats":            "d",
+    "Independents":         "ind",
+    # Ideology
+    "Very Conservative":    "very_conservative",
+    "Conservative":         "conservative",
+    "Moderate":             "moderate",
+    "Liberal":              "liberal",
+    "Very Liberal":         "very_liberal",
+    # Race / Ethnicity
+    "White":                "white",
+    "Black":                "black",
+    "Hispanic":             "hispanic",
+    "Non-White":            "non_white",
+    # Education
+    "HS or Less":           "hs_or_less",
+    "Some College":         "some_college",
+    "College Educated":     "college_plus",
+    # Age
+    "Ages 18-34":           "m18_34",
+    "Ages 35-54":           "m35_54",
+    "Ages 55-64":           "m55_64",
+    "Ages 65+":             "m65plus",
+    # Gender
+    "Men":                  "male",
+    "Women":                "female",
+    # Community Type
+    "Urban":                "urban",
+    "Suburban":             "suburban",
+    "Rural":                "rural",
 }
 
 
@@ -358,20 +379,21 @@ def render_question_cards(q_df, key_prefix="qcard"):
                 f'font-weight:500;">{topic_label}</span>'
             )
 
-        # Reform-supporting response label (shown below stem so you know what the % represents)
-        response_html = ""
-        if response_label:
-            response_html = (
-                f'<div style="font-size:0.78rem;color:{TEXT2};font-style:italic;'
-                f'border-left:3px solid {GOLD};padding-left:8px;margin:4px 0 6px 0;line-height:1.4;">'
-                f'✓ {response_label}'
-                f'</div>'
-            )
-
-        # Skeptic bar HTML — single-line to avoid markdown parser exiting HTML mode
-        skeptic_html = ""
+        # Build card HTML via concatenation — NO multiline template.
+        # A whitespace-only line inside st.markdown HTML kicks Streamlit out of HTML mode,
+        # so we never use an f-string template with optional {variable} placeholders.
+        overall_bar = (
+            f'<div style="display:flex;align-items:center;gap:8px;">'
+            f'<div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Overall</div>'
+            f'<div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">'
+            f'<div style="width:{min(overall, 100):.0f}%;height:100%;background:{overall_color};border-radius:3px;"></div>'
+            f'</div>'
+            f'<div style="width:40px;font-size:0.8rem;font-weight:600;color:{overall_color};">{overall:.0f}%</div>'
+            f'</div>'
+        )
+        skeptic_bar = ""
         if skeptic_pct:
-            skeptic_html = (
+            skeptic_bar = (
                 f'<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">'
                 f'<div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Skeptic</div>'
                 f'<div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">'
@@ -380,25 +402,31 @@ def render_question_cards(q_df, key_prefix="qcard"):
                 f'<div style="width:40px;font-size:0.8rem;font-weight:600;color:{GOLD};">{skeptic_pct}%</div>'
                 f'</div>'
             )
-
-        st.markdown(f"""
-        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;
-             padding:0.85rem 1rem;margin-bottom:0.5rem;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
-            <div style="font-size:0.88rem;color:{TEXT1};line-height:1.5;margin-bottom:0.35rem;">
-                {q_text}{topic_badge}
-            </div>
-            {response_html}
-            <div style="display:flex;align-items:center;gap:8px;">
-                <div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Overall</div>
-                <div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">
-                    <div style="width:{min(overall, 100):.0f}%;height:100%;background:{overall_color};border-radius:3px;"></div>
-                </div>
-                <div style="width:40px;font-size:0.8rem;font-weight:600;color:{overall_color};">{overall:.0f}%</div>
-            </div>
-            {skeptic_html}
-            <div style="font-size:0.65rem;color:{TEXT3};margin-top:4px;text-align:right;">n={n:,}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        response_bar = ""
+        if response_label:
+            response_bar = (
+                f'<div style="font-size:0.78rem;color:{TEXT2};font-style:italic;'
+                f'border-left:3px solid {GOLD};padding-left:8px;margin:4px 0 6px 0;line-height:1.4;">'
+                f'✓ {response_label}'
+                f'</div>'
+            )
+        n_line = f'<div style="font-size:0.65rem;color:{TEXT3};margin-top:4px;text-align:right;">n={n:,}</div>'
+        stem_div = (
+            f'<div style="font-size:0.88rem;color:{TEXT1};line-height:1.5;margin-bottom:0.35rem;">'
+            f'{q_text}{topic_badge}'
+            f'</div>'
+        )
+        card = (
+            f'<div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;'
+            f'padding:0.85rem 1rem;margin-bottom:0.5rem;box-shadow:0 1px 2px rgba(0,0,0,0.03);">'
+            + stem_div
+            + response_bar
+            + overall_bar
+            + skeptic_bar
+            + n_line
+            + '</div>'
+        )
+        st.markdown(card, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════

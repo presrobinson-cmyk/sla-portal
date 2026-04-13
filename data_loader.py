@@ -342,13 +342,26 @@ def load_demo_splits(survey_ids=None):
     Load support rates split by key demographic subgroups.
     Returns dict keyed by question_id:
       {qid: {
-          "r": r_pct,          "d": d_pct,
-          "hs_or_less": pct,   "some_college": pct,  "college_plus": pct,
-          "m18_34": pct,       "m35_54": pct,        "m55plus": pct,
-          "male": pct,         "female": pct,
+          # Party
+          "r": pct, "d": pct, "ind": pct,
+          # Ideology
+          "very_conservative": pct, "conservative": pct, "moderate": pct,
+          "liberal": pct, "very_liberal": pct,
+          # Race/Ethnicity
+          "white": pct, "black": pct, "hispanic": pct, "non_white": pct,
+          # Education
+          "hs_or_less": pct, "some_college": pct, "college_plus": pct,
+          # Age (4 brackets)
+          "m18_34": pct, "m35_54": pct, "m55_64": pct, "m65plus": pct,
+          # Gender
+          "male": pct, "female": pct,
+          # Community type
+          "urban": pct, "suburban": pct, "rural": pct,
        }}
     Any group with < 10 respondents gets None.
     """
+    import re as _re
+
     if survey_ids is None:
         survey_ids = CJ_SURVEYS
     if not SCORING_AVAILABLE:
@@ -357,13 +370,14 @@ def load_demo_splits(survey_ids=None):
     url, _ = get_supabase_config()
     headers = get_supabase_headers()
 
-    # Pull all L1 demographic columns at once
+    # Pull all L1 demographic columns at once (including new columns)
     all_l1 = []
     for sid in survey_ids:
         try:
             rows = _paginate(
                 f"{url}/rest/v1/l1_respondents"
-                f"?select=respondent_id,party_id,education,age_bracket,gender"
+                f"?select=respondent_id,party_id,ideology,education,age_bracket,"
+                f"race_ethnicity,gender,area_type"
                 f"&survey_id=eq.{sid}",
                 headers,
             )
@@ -375,46 +389,90 @@ def load_demo_splits(survey_ids=None):
     demo_lookup = {}
     for d in all_l1:
         rid = d["respondent_id"]
-        party = (d.get("party_id") or "").lower()
-        edu   = (d.get("education") or "").lower()
-        age   = (d.get("age_bracket") or "").lower()  # DB column is age_bracket, not age
-        gender = (d.get("gender") or "").lower()
+        party    = (d.get("party_id") or "").lower()
+        ideology = (d.get("ideology") or "").strip().lower()
+        edu      = (d.get("education") or "").lower()
+        age      = (d.get("age_bracket") or "").lower()  # DB column is age_bracket, not age
+        race     = (d.get("race_ethnicity") or "").lower()
+        gender   = (d.get("gender") or "").lower()
+        area     = (d.get("area_type") or "").lower()
 
         groups = []
-        # Party
+
+        # ── Party ────────────────────────────────────────────────
         if "republican" in party:
             groups.append("r")
         elif "democrat" in party:
             groups.append("d")
-        # Education — map common Alchemer / L2 labels
+        elif "no party" in party or "independent" in party or "none" in party:
+            groups.append("ind")
+
+        # ── Ideology ─────────────────────────────────────────────
+        # Order matters: check "very" before bare "conservative"/"liberal"
+        if "very conservative" in ideology:
+            groups.append("very_conservative")
+        elif "conservative" in ideology:
+            groups.append("conservative")
+        elif "very liberal" in ideology:
+            groups.append("very_liberal")
+        elif "liberal" in ideology:
+            groups.append("liberal")
+        elif "moderate" in ideology:
+            groups.append("moderate")
+
+        # ── Race / Ethnicity ─────────────────────────────────────
+        is_white = "white" in race and "non" not in race and "not" not in race
+        if is_white:
+            groups.append("white")
+        else:
+            # Only add non_white if race is actually specified (not blank)
+            if race:
+                groups.append("non_white")
+        if "black" in race or "african" in race:
+            groups.append("black")
+        if "hispanic" in race or "latino" in race or "latina" in race:
+            groups.append("hispanic")
+
+        # ── Education ────────────────────────────────────────────
         if any(x in edu for x in ["less than high", "no high", "grade", "elementary", "middle"]):
             groups.append("hs_or_less")
-        elif "high school" in edu or "hs" == edu or "diploma" in edu or "ged" in edu:
+        elif "high school" in edu or edu == "hs" or "diploma" in edu or "ged" in edu or "hs / ged" in edu:
             groups.append("hs_or_less")
         elif "some college" in edu or "associate" in edu or "vocational" in edu or "trade" in edu:
             groups.append("some_college")
-        elif "bachelor" in edu or "college" in edu or "4-year" in edu or "university" in edu:
+        elif "bachelor" in edu or "bachelor+" in edu or "4-year" in edu or "university" in edu:
             groups.append("college_plus")
-        elif "graduate" in edu or "master" in edu or "doctoral" in edu or "phd" in edu or "professional" in edu:
+        elif "graduate" in edu or "master" in edu or "doctoral" in edu or "phd" in edu or "professional" in edu or "post-graduate" in edu:
             groups.append("college_plus")
-        # Age
-        if any(x in age for x in ["18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33", "34"]):
-            groups.append("m18_34")
-        elif "18-34" in age or "18 to 34" in age:
-            groups.append("m18_34")
-        elif any(x in age for x in ["35", "36", "37", "38", "39", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51", "52", "53", "54"]):
-            groups.append("m35_54")
-        elif "35-54" in age or "35 to 54" in age:
-            groups.append("m35_54")
-        elif any(x in age for x in ["55", "56", "57", "58", "59", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "75", "80", "85", "older", "65+"]):
-            groups.append("m55plus")
-        elif "55+" in age or "55 and" in age or "55 or" in age:
-            groups.append("m55plus")
-        # Gender
+
+        # ── Age (4 brackets) ──────────────────────────────────────
+        # Extract first number from bracket string ("18-24" → 18, "65+" → 65)
+        age_nums = [int(x) for x in _re.findall(r'\d+', age)]
+        if age_nums:
+            min_age = age_nums[0]
+            if min_age < 35:
+                groups.append("m18_34")
+            elif min_age < 55:
+                groups.append("m35_54")
+            elif min_age < 65:
+                groups.append("m55_64")
+            else:
+                groups.append("m65plus")
+
+        # ── Gender ───────────────────────────────────────────────
         if "male" in gender and "fe" not in gender:
             groups.append("male")
         elif "female" in gender or "woman" in gender:
             groups.append("female")
+
+        # ── Community Type ───────────────────────────────────────
+        if "suburban" in area:
+            groups.append("suburban")
+        elif "urban" in area:
+            groups.append("urban")
+        elif "rural" in area:
+            groups.append("rural")
+
         demo_lookup[rid] = groups
 
     # Pull L2 and score by demographic group
@@ -432,8 +490,22 @@ def load_demo_splits(survey_ids=None):
         except Exception:
             continue  # Skip this survey; partial data is better than a full crash
 
-    GROUP_KEYS = ["r", "d", "hs_or_less", "some_college", "college_plus",
-                  "m18_34", "m35_54", "m55plus", "male", "female"]
+    GROUP_KEYS = [
+        # Party
+        "r", "d", "ind",
+        # Ideology
+        "very_conservative", "conservative", "moderate", "liberal", "very_liberal",
+        # Race
+        "white", "black", "hispanic", "non_white",
+        # Education
+        "hs_or_less", "some_college", "college_plus",
+        # Age
+        "m18_34", "m35_54", "m55_64", "m65plus",
+        # Gender
+        "male", "female",
+        # Community
+        "urban", "suburban", "rural",
+    ]
 
     # Canonical tally with demographic grouping — correct denominator
     def demo_group_fn(r):
