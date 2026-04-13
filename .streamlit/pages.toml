@@ -47,3 +47,13 @@ icon = "🤖"
 path = "pages/9_Methodology.py"
 name = "Methodology"
 icon = "📐"
+
+[[pages]]
+path = "pages/10_Profile.py"
+name = "Profile"
+icon = "👤"
+
+[[pages]]
+path = "pages/11_Community.py"
+name = "Community"
+icon = "💬"

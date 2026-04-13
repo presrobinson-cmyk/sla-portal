@@ -361,11 +361,11 @@ if view_mode == "Topic Comparison":
         spread = row["spread"]
         t_color = transfer_colors.get(transfer, TEXT3)
 
-        # Build state bars
+        # Build state bars — skip states with no data (None or NaN)
         state_scores = []
         for abbr in state_abbrs:
             val = row.get(abbr)
-            if val is not None:
+            if val is not None and pd.notna(val):
                 state_scores.append((abbr, val))
 
         state_scores.sort(key=lambda x: x[1], reverse=True)
@@ -467,8 +467,9 @@ elif view_mode == "Heat Map":
         h_row = []
         for abbr in state_abbrs:
             val = row.get(abbr)
-            z_row.append(val if val is not None else 0)
-            if val is not None:
+            has_data = val is not None and pd.notna(val)
+            z_row.append(val if has_data else None)
+            if has_data:
                 h_row.append(f"{row['topic']}<br>{abbr}: {val:.0f}%")
             else:
                 h_row.append(f"{row['topic']}<br>{abbr}: no data")
@@ -489,7 +490,7 @@ elif view_mode == "Heat Map":
         ],
         zmin=30,
         zmax=90,
-        text=[[f"{v:.0f}" if v else "" for v in row] for row in z_values],
+        text=[[f"{v:.0f}" if (v is not None and pd.notna(v) and v > 0) else "" for v in row] for row in z_values],
         texttemplate="%{text}%",
         textfont=dict(size=11, color=NAVY),
     ))
