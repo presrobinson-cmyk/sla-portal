@@ -257,18 +257,18 @@ def render_question_cards(q_df, key_prefix="qcard"):
                 f'font-weight:500;">{topic_label}</span>'
             )
 
-        # Skeptic bar HTML
+        # Skeptic bar HTML — single-line to avoid markdown parser exiting HTML mode
         skeptic_html = ""
         if skeptic_pct:
-            skeptic_html = f"""
-            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-                <div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Skeptic</div>
-                <div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">
-                    <div style="width:{min(skeptic_bar_width, 100):.0f}%;height:100%;background:{GOLD};border-radius:3px;"></div>
-                </div>
-                <div style="width:40px;font-size:0.8rem;font-weight:600;color:{GOLD};">{skeptic_pct}%</div>
-            </div>
-            """
+            skeptic_html = (
+                f'<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">'
+                f'<div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Skeptic</div>'
+                f'<div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">'
+                f'<div style="width:{min(skeptic_bar_width, 100):.0f}%;height:100%;background:{GOLD};border-radius:3px;"></div>'
+                f'</div>'
+                f'<div style="width:40px;font-size:0.8rem;font-weight:600;color:{GOLD};">{skeptic_pct}%</div>'
+                f'</div>'
+            )
 
         st.markdown(f"""
         <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;

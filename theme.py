@@ -398,6 +398,123 @@ def apply_theme():
         .hm-mid {{ background: rgba(184,135,10,0.12); color: #B8870A; font-weight: 500; }}
         .hm-lo {{ background: rgba(139,26,26,0.12); color: #8B1A1A; font-weight: 600; }}
 
+        /* ── Input fields — light theme globally ── */
+
+        /* Text inputs */
+        .stTextInput > div > div > input {{
+            background-color: #ffffff !important;
+            color: {TEXT1} !important;
+            border: 1.5px solid {BORDER} !important;
+            border-radius: 8px !important;
+        }}
+        .stTextInput > div > div > input:focus {{
+            border-color: {GOLD} !important;
+            box-shadow: 0 0 0 3px rgba(184,135,10,0.15) !important;
+        }}
+        .stTextInput > div > div > input::placeholder {{
+            color: #aaa !important;
+        }}
+
+        /* Text areas */
+        .stTextArea > div > div > textarea {{
+            background-color: #ffffff !important;
+            color: {TEXT1} !important;
+            border: 1.5px solid {BORDER} !important;
+            border-radius: 8px !important;
+        }}
+        .stTextArea > div > div > textarea:focus {{
+            border-color: {GOLD} !important;
+            box-shadow: 0 0 0 3px rgba(184,135,10,0.15) !important;
+        }}
+
+        /* Selectbox */
+        .stSelectbox > div > div {{
+            background-color: #ffffff !important;
+            border: 1.5px solid {BORDER} !important;
+            border-radius: 8px !important;
+        }}
+        .stSelectbox > div > div > div {{
+            color: {TEXT1} !important;
+        }}
+        .stSelectbox > div > div:focus-within {{
+            border-color: {GOLD} !important;
+            box-shadow: 0 0 0 3px rgba(184,135,10,0.15) !important;
+        }}
+
+        /* Multiselect */
+        .stMultiSelect > div > div {{
+            background-color: #ffffff !important;
+            border: 1.5px solid {BORDER} !important;
+            border-radius: 8px !important;
+        }}
+        .stMultiSelect > div > div > div {{
+            color: {TEXT1} !important;
+        }}
+        .stMultiSelect > div > div:focus-within {{
+            border-color: {GOLD} !important;
+            box-shadow: 0 0 0 3px rgba(184,135,10,0.15) !important;
+        }}
+
+        /* Dropdown menus (the popup list) */
+        [data-baseweb="popover"] ul,
+        [data-baseweb="menu"] {{
+            background-color: #ffffff !important;
+            border: 1px solid {BORDER} !important;
+            border-radius: 8px !important;
+        }}
+        [data-baseweb="menu"] li {{
+            color: {TEXT1} !important;
+        }}
+        [data-baseweb="menu"] li:hover {{
+            background-color: {GOLD_PALE} !important;
+        }}
+
+        /* Input labels */
+        .stTextInput label,
+        .stTextArea label,
+        .stSelectbox label,
+        .stMultiSelect label {{
+            color: {TEXT2} !important;
+            font-size: 0.84rem !important;
+            font-weight: 600 !important;
+        }}
+
+        /* Sidebar inputs — keep readable on dark bg */
+        [data-testid="stSidebar"] .stSelectbox > div > div,
+        [data-testid="stSidebar"] .stMultiSelect > div > div,
+        [data-testid="stSidebar"] .stTextInput > div > div > input,
+        [data-testid="stSidebar"] .stTextArea > div > div > textarea {{
+            background-color: rgba(255,255,255,0.10) !important;
+            color: #e8e8ed !important;
+            border-color: rgba(255,255,255,0.18) !important;
+        }}
+        [data-testid="stSidebar"] .stSelectbox > div > div > div,
+        [data-testid="stSidebar"] .stMultiSelect > div > div > div {{
+            color: #e8e8ed !important;
+        }}
+
+        /* Download button */
+        .stDownloadButton > button {{
+            background-color: {GOLD} !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 700 !important;
+        }}
+        .stDownloadButton > button:hover {{
+            background-color: {GOLD_MID} !important;
+        }}
+
+        /* Primary form submit button */
+        .stFormSubmitButton > button[kind="primaryFormSubmit"],
+        .stFormSubmitButton > button {{
+            background-color: {NAVY} !important;
+            color: #ffffff !important;
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+        }}
+
         /* Hide default Streamlit chrome */
         #MainMenu {{visibility: hidden;}}
         footer {{visibility: hidden;}}
