@@ -232,7 +232,7 @@ SURVEY_INSIGHTS: List[Dict[str, Any]] = [
     },
     {
         "id": "recdybh4lIieR1lor",
-        "insight": "Trust axis is independent from reform axis (r=0.13-0.18)",
+        "insight": "Trust items measure a distinct dimension from reform support (r=0.13-0.18)",
         "type": "Methodology",
         "priority": "Should address",
         "constructs": ["TRUST", "EQUITY", "COUNSEL", "FIRSTAPPEAR", "ALPR"],
@@ -244,7 +244,7 @@ SURVEY_INSIGHTS: List[Dict[str, Any]] = [
             "TRUST, EQUITY, COUNSEL, FIRSTAPPEAR, ALPR, DISPARITIES."
         ),
         "recommended_action": (
-            "Maintain trust axis items in every future wave. These are not redundant "
+            "Maintain TRUST items in every future wave. They are not redundant "
             "with reform items — they measure an independent dimension that determines "
             "messaging strategy. Consider adding 1-2 more trust items to strengthen "
             "measurement (currently only CJ-TRUST1 is a direct trust measure; others "
@@ -360,33 +360,34 @@ SURVEY_INSIGHTS: List[Dict[str, Any]] = [
         "description": (
             "CJ-TRUST1 ('How much trust do you have in local prosecutors...') uses a "
             "4-point trust scale (A lot / Some / Not much / No trust at all). This "
-            "works for the trust axis but doesn't map cleanly to the reform direction "
+            "works as a landscape/gauge item but doesn't map cleanly to the reform direction "
             "framework. Currently scored as multi_favorable where high trust = "
-            "favorable for axis purposes. But for reform messaging, the relationship "
+            "favorable. But for reform messaging, the relationship "
             "between trust and reform support is not linear — it's gated."
         ),
         "recommended_action": (
             "Add more trust measurement items to future waves. Consider: trust in "
             "judges, trust in public defenders, trust in the parole board, trust in "
-            "police. A multi-item trust battery would strengthen the axis and allow "
-            "sub-dimensions of trust to emerge. Also consider adding a direct 'Does "
-            "the system need reform?' meta-question."
+            "police. A multi-item trust battery would allow sub-dimensions of trust "
+            "to emerge. Also consider adding a direct 'Does the system need reform?' "
+            "meta-question."
         ),
         "status": "Open",
         "states": ["ALL"],
     },
     {
         "id": "recsPxVThtjev26rv",
-        "insight": "Factor analysis: 3 construct clusters with r=0.53-0.59 between axes",
+        "insight": "Factor analysis: 3 construct clusters with r=0.53-0.59 between clusters",
         "type": "Methodology",
         "priority": "Long-term",
         "constructs": ["ALL"],
         "description": (
             "Factor analysis found 3 construct clusters with moderate inter-cluster "
-            "correlations (r=0.53-0.59), meaning the axes are related but not "
-            "redundant. The gate sequence in VIP (trust → reform) is a strategic "
-            "design choice, not a statistical necessity. The 3 clusters align roughly "
-            "with: (1) system trust/fairness, (2) sentence reform/compassion, "
+            "correlations (r=0.53-0.59), meaning the clusters are related but not "
+            "redundant. The persuasion tier sequence (Entry → Bridge → Downstream) is "
+            "a strategic design choice grounded in this cluster structure, not a "
+            "statistical necessity. The 3 clusters align roughly with: "
+            "(1) system trust/fairness, (2) sentence reform/compassion, "
             "(3) process reform/rights."
         ),
         "recommended_action": (

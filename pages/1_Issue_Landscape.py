@@ -264,12 +264,16 @@ def aggregate_to_topics(question_data):
         if not construct or construct in GAUGE_CONSTRUCTS:
             continue
 
-        topic_agg[construct]["reaches"].append(qd["overall_support"])
+        overall_pct = qd["overall_support"]
+        if overall_pct is None:
+            continue  # Skip questions with no computable support rate (both mrp_pct and raw_pct are None)
+
+        topic_agg[construct]["reaches"].append(overall_pct)
         topic_agg[construct]["n_total"] += qd["n"]
         topic_agg[construct]["questions"].append({
             "qid": qid,
             "text": qd["text"],
-            "overall_support": qd["overall_support"],
+            "overall_support": overall_pct,
             "skeptic_support": qd["skeptic_support"],
             "n": qd["n"],
         })
@@ -308,7 +312,7 @@ def aggregate_to_topics(question_data):
             "quadrant": quad,
             "n_questions": len(agg["reaches"]),
             "n_respondents": agg["n_total"],
-            "questions": sorted(agg["questions"], key=lambda q: q["overall_support"], reverse=True),
+            "questions": sorted(agg["questions"], key=lambda q: q["overall_support"] or 0, reverse=True),
         })
 
     return topics
@@ -421,7 +425,10 @@ if not topics:
     st.stop()
 
 df = pd.DataFrame(topics)
-df_plot = df.dropna(subset=["skeptic_support"])
+# df_scatter: only rows with subgroup data — used exclusively for the Scatter view
+# df_plot: full dataset — used for Gauge, Ranked List, MPT, and Question views
+df_scatter = df.dropna(subset=["skeptic_support"])
+df_plot = df  # all views except scatter use full data
 
 # ── Sidebar filters ──
 with st.sidebar:
@@ -441,15 +448,25 @@ with st.sidebar:
         ct = len(df_plot[df_plot["quadrant"] == q])
         st.caption(f"● {q}: {ct}")
 
-# Apply filters
-filtered = df_plot.copy()
+# Apply filters — scatter uses df_scatter, everything else uses df_plot
+if view_mode == "Scatter":
+    filtered = df_scatter.copy()
+else:
+    filtered = df_plot.copy()
+
 if tier_filter != "All Tiers":
     filtered = filtered[filtered["tier"] == tier_filter]
 if quad_filter:
     filtered = filtered[filtered["quadrant"].isin(quad_filter)]
 
 if filtered.empty:
-    st.warning("No topics match the current filters.")
+    if view_mode == "Scatter" and df_scatter.empty:
+        st.info(
+            "Subgroup data is still loading — switch to **Consensus Gauge** or **Ranked List** "
+            "to view all topics now. The scatter will populate once demographic splits are cached."
+        )
+    else:
+        st.warning("No topics match the current filters.")
     st.stop()
 
 

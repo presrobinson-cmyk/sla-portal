@@ -29,7 +29,8 @@ except ImportError:
 # ══════════════════════════════════════════════════════════════════
 
 def render_data_source_toggle():
-    """Render a sidebar toggle for MrP vs Raw data display.
+    """Render a compact top-of-page control bar: MrP/Raw toggle + cache age + refresh button.
+    Moved out of the sidebar so it's visible above the fold, not buried below nav links.
     Returns the current selection: "mrp" or "raw".
     Persists in session_state so it stays consistent across pages.
     """
@@ -40,13 +41,15 @@ def render_data_source_toggle():
     if "_data_loaded_at" not in st.session_state:
         st.session_state["_data_loaded_at"] = datetime.now(timezone.utc)
 
-    with st.sidebar:
-        st.markdown("### Data Source")
+    col_toggle, col_age, col_btn = st.columns([4, 3, 1])
+
+    with col_toggle:
         choice = st.radio(
-            "Display numbers as:",
+            "Data source",
             ["MrP-Adjusted", "Raw Survey"],
             index=0 if st.session_state["data_source_mode"] == "mrp" else 1,
             key="_data_source_radio",
+            horizontal=True,
             help=(
                 "**MrP-Adjusted**: Population-weighted estimates using multilevel "
                 "regression with poststratification. More accurate for state-level "
@@ -54,23 +57,26 @@ def render_data_source_toggle():
                 "**Raw Survey**: Direct response tallies without modeling adjustment."
             ),
         )
-        mode = "mrp" if choice == "MrP-Adjusted" else "raw"
-        st.session_state["data_source_mode"] = mode
 
-        # Cache freshness info + manual refresh
+    mode = "mrp" if choice == "MrP-Adjusted" else "raw"
+    st.session_state["data_source_mode"] = mode
+
+    with col_age:
         loaded_at = st.session_state.get("_data_loaded_at")
         if loaded_at:
             age = datetime.now(timezone.utc) - loaded_at
             hours = int(age.total_seconds() // 3600)
             mins  = int((age.total_seconds() % 3600) // 60)
             age_str = f"{hours}h {mins}m ago" if hours else f"{mins}m ago"
-            st.caption(f"Data cached · loaded {age_str} · refreshes weekly")
-        if st.button("↻ Refresh data", key="_refresh_data_btn", use_container_width=True):
+            st.caption(f"Cached · loaded {age_str} · refreshes weekly")
+
+    with col_btn:
+        if st.button("↻ Refresh", key="_refresh_data_btn", use_container_width=True):
             st.cache_data.clear()
             st.session_state["_data_loaded_at"] = datetime.now(timezone.utc)
             st.rerun()
 
-        st.divider()
+    st.divider()
 
     return mode
 
@@ -84,6 +90,71 @@ def get_display_pct(qd, mode="mrp"):
         return qd.get("raw_pct") if qd.get("raw_pct") is not None else qd.get("mrp_pct")
     else:
         return qd.get("mrp_pct") if qd.get("mrp_pct") is not None else qd.get("raw_pct")
+
+
+# ══════════════════════════════════════════════════════════════════
+# CANONICAL SUPPORT-RATE HELPER
+# ══════════════════════════════════════════════════════════════════
+
+def tally_responses(rows, qid_col="question_id", response_col="response",
+                    survey_col="survey_id", group_fn=None):
+    """
+    Canonical support-rate computation. SINGLE SOURCE OF TRUTH for all callers.
+
+    Correct denominator rule:
+        support_rate = n_favorable / n_total
+        n_total = ALL responses, including neutral ("not sure") ones.
+        score_content() returns (None, ...) for neutrals — those rows count
+        toward n but not toward n_favorable.
+
+    Args:
+        rows       : list of dicts, each with at least qid_col and response_col
+        qid_col    : column name holding the question ID
+        response_col: column name holding the response text
+        survey_col : column name holding the survey ID (passed to score_content)
+        group_fn   : optional callable(row) → list[str] of group keys
+                     If provided, returns per-group tallies in addition to overall.
+
+    Returns:
+        dict keyed by qid:
+            {
+              "f": int,          # favorable count
+              "n": int,          # total count (includes neutrals)
+              "groups": {        # only present when group_fn is provided
+                  group_key: {"f": int, "n": int}, ...
+              }
+            }
+
+    Callers compute pct as:  (s["f"] / s["n"] * 100) if s["n"] > 0 else 0
+    Do NOT divide f/n-where-n-excludes-neutrals.
+    """
+    if not SCORING_AVAILABLE:
+        return {}
+
+    tallies = defaultdict(lambda: {"f": 0, "n": 0, "groups": defaultdict(lambda: {"f": 0, "n": 0})})
+
+    for r in rows:
+        qid = r.get(qid_col)
+        if not qid or qid in SKIPPED_QIDS:
+            continue
+        if not get_construct(qid):
+            continue
+
+        fav, _, _ = score_content(qid, r.get(response_col, ""), r.get(survey_col))
+
+        # Always increment total — neutral (fav=None) rows belong in denominator
+        tallies[qid]["n"] += 1
+        if fav == 1:
+            tallies[qid]["f"] += 1
+
+        # Per-group tallies when caller provides a grouping function
+        if group_fn is not None:
+            for grp in (group_fn(r) or []):
+                tallies[qid]["groups"][grp]["n"] += 1
+                if fav == 1:
+                    tallies[qid]["groups"][grp]["f"] += 1
+
+    return dict(tallies)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -167,37 +238,32 @@ def load_raw_l2_for_surveys(survey_ids):
         )
         all_l2.extend(rows)
 
-    # Score and tally
-    q_stats = defaultdict(lambda: {"f": 0, "n": 0, "construct": None, "text": "", "survey_id": None})
+    # Build text/construct/survey_id metadata lookup from raw rows
+    meta = {}
     for r in all_l2:
         qid = r.get("question_id")
-        if not qid or qid in SKIPPED_QIDS:
-            continue
-        construct = get_construct(qid)
-        if not construct:
-            continue
-        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
-        if fav is None:
-            continue
-        is_fav = 1 if fav == 1 else 0
-        q_stats[qid]["f"] += is_fav
-        q_stats[qid]["n"] += 1
-        q_stats[qid]["construct"] = construct
-        if r.get("question_text"):
-            q_stats[qid]["text"] = r["question_text"]
-        q_stats[qid]["survey_id"] = r.get("survey_id")
+        if qid and qid not in meta:
+            meta[qid] = {
+                "text": r.get("question_text", ""),
+                "construct": get_construct(qid) if SCORING_AVAILABLE else None,
+                "survey_id": r.get("survey_id"),
+            }
+
+    # Canonical tally — correct denominator (neutrals included in n)
+    tallies = tally_responses(all_l2)
 
     result = {}
-    for qid, s in q_stats.items():
+    for qid, s in tallies.items():
         if s["n"] < 20:
             continue
+        m = meta.get(qid, {})
         result[qid] = {
             "raw_pct": s["f"] / s["n"] * 100,
             "mrp_pct": None,  # No MrP available
             "n_respondents": s["n"],
-            "question_text": s["text"],
-            "construct": s["construct"],
-            "survey_id": s["survey_id"],
+            "question_text": m.get("text", ""),
+            "construct": m.get("construct"),
+            "survey_id": m.get("survey_id"),
             "source": "raw",
         }
     return result
@@ -245,31 +311,23 @@ def load_party_splits(survey_ids=None):
         )
         all_l2.extend(rows)
 
-    q_party = defaultdict(lambda: {"r_f": 0, "r_n": 0, "d_f": 0, "d_n": 0})
-    for r in all_l2:
-        qid = r.get("question_id")
-        if not qid or qid in SKIPPED_QIDS:
-            continue
-        construct = get_construct(qid)
-        if not construct:
-            continue
-        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
-        if fav is None:
-            continue
-        is_fav = 1 if fav == 1 else 0
-        party = party_lookup.get(r["respondent_id"], "")
-        if party and "republican" in party.lower():
-            q_party[qid]["r_f"] += is_fav
-            q_party[qid]["r_n"] += 1
-        elif party and "democrat" in party.lower():
-            q_party[qid]["d_f"] += is_fav
-            q_party[qid]["d_n"] += 1
+    # Canonical tally with party grouping — correct denominator
+    def party_group_fn(r):
+        party = party_lookup.get(r.get("respondent_id", ""), "").lower()
+        if "republican" in party:
+            return ["r"]
+        elif "democrat" in party:
+            return ["d"]
+        return []
+
+    tallies = tally_responses(all_l2, group_fn=party_group_fn)
 
     result = {}
-    for qid, s in q_party.items():
+    for qid, s in tallies.items():
+        grp = s["groups"]
         result[qid] = {
-            "r_pct": (s["r_f"] / s["r_n"] * 100) if s["r_n"] >= 10 else None,
-            "d_pct": (s["d_f"] / s["d_n"] * 100) if s["d_n"] >= 10 else None,
+            "r_pct": (grp["r"]["f"] / grp["r"]["n"] * 100) if grp["r"]["n"] >= 10 else None,
+            "d_pct": (grp["d"]["f"] / grp["d"]["n"] * 100) if grp["d"]["n"] >= 10 else None,
         }
     return result
 
@@ -305,7 +363,7 @@ def load_demo_splits(survey_ids=None):
         try:
             rows = _paginate(
                 f"{url}/rest/v1/l1_respondents"
-                f"?select=respondent_id,party_id,education,age,gender"
+                f"?select=respondent_id,party_id,education,age_bracket,gender"
                 f"&survey_id=eq.{sid}",
                 headers,
             )
@@ -319,7 +377,7 @@ def load_demo_splits(survey_ids=None):
         rid = d["respondent_id"]
         party = (d.get("party_id") or "").lower()
         edu   = (d.get("education") or "").lower()
-        age   = (d.get("age") or "").lower()
+        age   = (d.get("age_bracket") or "").lower()  # DB column is age_bracket, not age
         gender = (d.get("gender") or "").lower()
 
         groups = []
@@ -376,28 +434,19 @@ def load_demo_splits(survey_ids=None):
 
     GROUP_KEYS = ["r", "d", "hs_or_less", "some_college", "college_plus",
                   "m18_34", "m35_54", "m55plus", "male", "female"]
-    q_demo = defaultdict(lambda: {k: {"f": 0, "n": 0} for k in GROUP_KEYS})
 
-    for r in all_l2:
-        qid = r.get("question_id")
-        if not qid or qid in SKIPPED_QIDS:
-            continue
-        construct = get_construct(qid)
-        if not construct:
-            continue
-        fav, intensity, has_int = score_content(qid, r["response"], r.get("survey_id"))
-        if fav is None:
-            continue
-        is_fav = 1 if fav == 1 else 0
-        for grp in demo_lookup.get(r["respondent_id"], []):
-            q_demo[qid][grp]["f"] += is_fav
-            q_demo[qid][grp]["n"] += 1
+    # Canonical tally with demographic grouping — correct denominator
+    def demo_group_fn(r):
+        return demo_lookup.get(r.get("respondent_id", ""), [])
+
+    tallies = tally_responses(all_l2, group_fn=demo_group_fn)
 
     result = {}
-    for qid, groups in q_demo.items():
+    for qid, s in tallies.items():
+        grp = s["groups"]
         result[qid] = {
-            grp: (groups[grp]["f"] / groups[grp]["n"] * 100) if groups[grp]["n"] >= 10 else None
-            for grp in GROUP_KEYS
+            k: (grp[k]["f"] / grp[k]["n"] * 100) if grp[k]["n"] >= 10 else None
+            for k in GROUP_KEYS
         }
     return result
 
@@ -447,15 +496,28 @@ def load_question_data_hybrid(survey_ids=None):
         # If we already have this qid from a different survey, merge
         if qid in question_data:
             existing = question_data[qid]
-            # Weighted average by respondent count
+            # None-safe weighted average by respondent count.
+            # mrp_pct / raw_pct can be null in the DB; multiplying None * n raises TypeError.
             old_n = existing["n_respondents"]
             new_n = row.get("n_respondents", 0)
             total_n = old_n + new_n
             if total_n > 0:
-                existing["mrp_pct"] = (existing["mrp_pct"] * old_n + row["mrp_pct"] * new_n) / total_n
-                existing["raw_pct"] = (existing["raw_pct"] * old_n + row["raw_pct"] * new_n) / total_n
+                e_mrp, r_mrp = existing["mrp_pct"], row.get("mrp_pct")
+                if e_mrp is not None and r_mrp is not None:
+                    existing["mrp_pct"] = (e_mrp * old_n + r_mrp * new_n) / total_n
+                elif r_mrp is not None:
+                    existing["mrp_pct"] = r_mrp
+                # else: keep existing mrp_pct (may be None — better than crashing)
+
+                e_raw, r_raw = existing["raw_pct"], row.get("raw_pct")
+                if e_raw is not None and r_raw is not None:
+                    existing["raw_pct"] = (e_raw * old_n + r_raw * new_n) / total_n
+                elif r_raw is not None:
+                    existing["raw_pct"] = r_raw
+                # else: keep existing raw_pct
+
                 existing["n_respondents"] = total_n
-                existing["display_pct"] = existing["mrp_pct"]
+                existing["display_pct"] = existing["mrp_pct"] if existing["mrp_pct"] is not None else existing["raw_pct"]
         else:
             question_data[qid] = {
                 "mrp_pct": row.get("mrp_pct"),

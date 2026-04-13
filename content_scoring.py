@@ -304,7 +304,7 @@ FAVORABLE_DIRECTION = {
     "CJ-Q130":          {"type": "likert", "favorable_side": "agree"},
     "CJ-TREATMENT-OMN1": {"type": "likert", "favorable_side": "agree"},
 
-    # ── SYSTEM IMPACT PERCEPTION (Axis 1 — system trust proxy) ──────────────
+    # ── SYSTEM IMPACT PERCEPTION (system trust proxy) ────────────────────────
     # Belief that tough-on-crime didn't deliver = doesn't trust the system's promises
     "CJ-IMPACT1":  {"type": "multi_favorable", "favorable_contains": ["less safe", "about the same"]},  # laws didn't improve safety = reform-favorable
 
@@ -499,7 +499,7 @@ SKIPPED_RETAIN = {
     "CJ-OK-EQUITY-LAWYER",
     # ── BF: Safety perception, crime attribution, equity, fiscal ────────
     "CJ-SAFETY1", "CJ-CRIME2", "CJ-EQUITY1", "CJ-FISCAL2",
-    # CJ-IMPACT1 moved to REFORM_DIRECTION — Axis 1 system-trust proxy
+    # CJ-IMPACT1 moved to REFORM_DIRECTION — system-trust proxy
     # ── BF: Purpose of prison / review rankings (JSON) ──────────────────
     "CJ-EQUITY1-RANK", "CJ-PURPOSE1", "CJ-PURPOSE1-C", "CJ-PURPOSE1b",
     "CJ-REVIEW-OMN3",
@@ -683,15 +683,17 @@ SKIPPED_QIDS = SKIPPED_DEMOGRAPHIC | SKIPPED_RETAIN
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# AXIS ASSIGNMENTS — Construct → Axis mapping
+# CONSTRUCT GROUPINGS — Internal code grouping sets (implementation only).
+# These variable names are legacy scaffolding. The organizing framework is
+# the persuasion tier architecture (Entry → Bridge → Downstream), not axes.
 # ══════════════════════════════════════════════════════════════════════════════
 
 AXIS_1_CONSTRUCTS = {
     "BAIL", "TRUST", "PLEA", "PROS", "ALPR", "FINES",
     "PROMISE", "INNOCENCE", "CAND", "IMPACT", "ISSUE_SALIENCE",
-    # ── Apr 12 2026 (Preston): DV moved from Axis 2 to Axis 1 ───────────
+    # ── Apr 12 2026 (Preston): DV moved here ─────────────────────────────
     # All 5 DV items ask about circumstances causing crime (DV/trafficking
-    # victimization as mitigating factor) — Causal Attribution, not Durability.
+    # victimization as mitigating factor) — Bridge tier.
     "DV",
     # ── Apr 10 2026 restructure (Preston) ─────────────────────────────────
     "RACIAL_DISPARITIES",  # split from DISPARITIES: racial-framing items only
@@ -700,7 +702,7 @@ AXIS_1_CONSTRUCTS = {
     # ── Apr 10 2026 dead-construct prune ──────────────────────────────────
     # Removed: EQUITY, PD, RACIAL, DISPARITIES, RECORD-CLEAR, FIRSTAPPEAR,
     # COUNSEL, MENTAL-PREV. All folded into RACIAL_DISPARITIES /
-    # ECON_DISPARITIES / MENTAL_ADDICTION / REPRESENTATION (Axis 3 — see below).
+    # ECON_DISPARITIES / MENTAL_ADDICTION / REPRESENTATION (see AXIS_3 below).
 }
 
 AXIS_2_CONSTRUCTS = {
@@ -739,11 +741,9 @@ AXIS_3_CONSTRUCTS = {
     "DP_ABOLITION",
     "DP_RELIABILITY",
     # ── Apr 10 2026 (Preston, post-cluster verification) ──────────────────
-    # REPRESENTATION (originally Axis 1) was reaxised AND split based on the
-    # cluster-verification pass. PD-funding items and COUNSEL items correlate
-    # r ≈ 0.01–0.05 — they are not one construct. Both halves are policy-
-    # endorsement language, so they belong on Axis 3 (Approach), not Axis 1
-    # (Causal Attribution). VA-COUNSEL1 ↔ VA-COUNSEL2 correlate r = 0.22 —
+    # REPRESENTATION was split based on the cluster-verification pass.
+    # PD-funding items and COUNSEL items correlate r ≈ 0.01–0.05 — they are
+    # not one construct. VA-COUNSEL1 ↔ VA-COUNSEL2 correlate r = 0.22 —
     # weak but kept together per Preston's call.
     "PD_FUNDING",      # CJ-PD1, CJ-PD2, CJ-PD2-B (and CJ-Q33, which is a
                        # verbatim duplicate of CJ-PD2-B — canonical merge queued)
@@ -752,7 +752,7 @@ AXIS_3_CONSTRUCTS = {
                        # if/when it returns from phantom.
     # ── Apr 10 2026 dead-construct prune ──────────────────────────────────
     # Removed: CLASS, MENTAL, ADDICT, TREATMENT. Folded into PROP (CLASS) or
-    # MENTAL_ADDICTION (Axis 1).
+    # MENTAL_ADDICTION.
     # REMOVED: CONDITIONS (ceiling effect — poorly worded, near-universal agreement)
     # REMOVED: CRIME (CJ-OK-COVID-CRIME is a partisan snapshot from 2024, not a reform attitude)
     # RENAMED (Apr 10 2026): REFORM → REFORM_LEGITIMACY. The three items (CJ-OK-REFORM-BLAME,
@@ -905,9 +905,9 @@ _COMPOUND_CONSTRUCT = {
     # ── Apr 10 2026 (Preston, BAIL cluster verification) ──────────────────
     # BAIL median r = 0.155. Preston's call: CJ-BAIL3 is a judicial-
     # discretion question, not a bail question. "Fixed bail schedules vs.
-    # judicial discretion" crosses the reform/not-reform axis in both
-    # directions. Move to JUDICIAL; keep the favorable marker but flag for
-    # scoring-direction review under Axis-3 JUDICIAL semantics.
+    # judicial discretion" cuts both reform directions. Move to JUDICIAL;
+    # keep the favorable marker but flag for scoring-direction review under
+    # JUDICIAL construct semantics.
     "CJ-BAIL3":           "JUDICIAL",
     "VA-COUNSEL1":     "COUNSEL_ACCESS",
     "VA-COUNSEL2":     "COUNSEL_ACCESS",
@@ -990,12 +990,12 @@ _Q_SERIES_CONSTRUCT = {
 
 
 def get_axis(qid):
-    """Return axis number (1, 2, or 3) for a QID, or None if not CJ-assigned.
+    """Return construct grouping number (1, 2, or 3) for a QID, or None.
 
-    Only CJ-domain QIDs get axis assignments.  Non-CJ prefixes (CCS-, HI-,
-    POL-, EBR-) are excluded even when their construct name happens to match
-    an AXIS_*_CONSTRUCTS entry (e.g. HI-TRUST1 → "TRUST" is a health-insurance
-    item, not a CJ System Reliability item).
+    Internal code grouping only — not a conceptual framework. Only CJ-domain
+    QIDs get assignments. Non-CJ prefixes (CCS-, HI-, POL-, EBR-) are excluded
+    even when their construct name happens to match an AXIS_*_CONSTRUCTS entry
+    (e.g. HI-TRUST1 → "TRUST" is a health-insurance item, not a CJ item).
     """
     if not qid:
         return None
