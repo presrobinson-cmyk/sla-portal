@@ -601,9 +601,9 @@ if has_inputs:
         context_parts.append(f"OUTPUT FORMAT: {output_format}")
 
         st.info(
-            "💡 **Tip**: Use the AI chat at the bottom of this page to generate your message. "
-            "Copy the context below and paste it into the chat, or ask the AI directly — "
-            "it has access to all the polling data and frameworks."
+            "💡 **Tip**: Copy the brief below and take it to the **AI Analysis** page to generate your message. "
+            "Copy the context below and paste it into the AI Analysis page chat — "
+            "the AI has access to all the polling data and frameworks."
         )
 
         with st.expander("📋 Your message brief (copy to chat)", expanded=True):
@@ -624,5 +624,4 @@ st.divider()
 # CHAT WIDGET & FOOTER
 # ─────────────────────────────────────────────────────────────────
 
-render_chat("mediamaker")
 portal_footer()

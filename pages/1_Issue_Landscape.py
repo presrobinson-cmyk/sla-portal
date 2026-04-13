@@ -278,6 +278,62 @@ def get_gauge_color(support_pct):
         return GAUGE_COLORS["contested"]  # Red: #8B1A1A
 
 
+def render_question_cards(q_df, key_prefix="qcard"):
+    """Render questions as cards: full question text on top, support bars below.
+    q_df must have columns: text, overall_support, skeptic_support, n, topic (optional).
+    """
+    for i, (_, row) in enumerate(q_df.iterrows()):
+        q_text = row.get("text", "—") or "—"
+        overall = row.get("overall_support", 0) or 0
+        skeptic = row.get("skeptic_support", None)
+        n = row.get("n", 0)
+        topic_label = row.get("topic", "")
+
+        overall_color = get_gauge_color(overall)
+        skeptic_pct = f"{skeptic:.0f}" if skeptic is not None and skeptic > 0 else None
+        skeptic_bar_width = max(skeptic, 0) if skeptic is not None else 0
+
+        # Topic badge
+        topic_badge = ""
+        if topic_label:
+            topic_badge = (
+                f'<span style="display:inline-block;background:rgba(14,31,61,0.08);color:{NAVY};'
+                f'font-size:0.7rem;padding:1px 8px;border-radius:10px;margin-left:6px;'
+                f'font-weight:500;">{topic_label}</span>'
+            )
+
+        # Skeptic bar HTML
+        skeptic_html = ""
+        if skeptic_pct:
+            skeptic_html = f"""
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+                <div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Skeptic</div>
+                <div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">
+                    <div style="width:{min(skeptic_bar_width, 100):.0f}%;height:100%;background:{GOLD};border-radius:3px;"></div>
+                </div>
+                <div style="width:40px;font-size:0.8rem;font-weight:600;color:{GOLD};">{skeptic_pct}%</div>
+            </div>
+            """
+
+        st.markdown(f"""
+        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;
+             padding:0.85rem 1rem;margin-bottom:0.5rem;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+            <div style="font-size:0.88rem;color:{TEXT1};line-height:1.5;margin-bottom:0.5rem;">
+                {q_text}{topic_badge}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <div style="width:68px;font-size:0.72rem;color:{TEXT3};text-align:right;">Overall</div>
+                <div style="flex:1;height:16px;background:{BORDER2};border-radius:3px;overflow:hidden;">
+                    <div style="width:{min(overall, 100):.0f}%;height:100%;background:{overall_color};border-radius:3px;"></div>
+                </div>
+                <div style="width:40px;font-size:0.8rem;font-weight:600;color:{overall_color};">{overall:.0f}%</div>
+            </div>
+            {skeptic_html}
+            <div style="font-size:0.65rem;color:{TEXT3};margin-top:4px;text-align:right;">n={n:,}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
 # ══════════════════════════════════════════════════════════════════
 # MAIN PAGE
 # ══════════════════════════════════════════════════════════════════
@@ -436,65 +492,8 @@ if view_mode == "Consensus Gauge":
                     f'<strong>{len(questions)} survey questions</strong> supporting this topic:</div>',
                     unsafe_allow_html=True,
                 )
-
-                q_df = pd.DataFrame(questions)
-
-                # Horizontal bar chart with full question text (no truncation)
-                fig_q = go.Figure()
-
-                fig_q.add_trace(go.Bar(
-                    y=q_df["text"],
-                    x=q_df["overall_support"],
-                    name="Overall Support",
-                    orientation="h",
-                    marker_color=NAVY,
-                    text=q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
-                    textposition="auto",
-                    textfont=dict(color="white", size=9),
-                    hovertemplate="%{y}<br>Overall: %{x:.1f}%<extra></extra>",
-                ))
-
-                skeptic_vals = q_df["skeptic_support"].fillna(0)
-                fig_q.add_trace(go.Bar(
-                    y=q_df["text"],
-                    x=skeptic_vals,
-                    name="Skeptic Support",
-                    orientation="h",
-                    marker_color=GOLD,
-                    text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
-                    textposition="auto",
-                    textfont=dict(color=NAVY, size=9),
-                    hovertemplate="%{y}<br>Skeptic: %{x:.1f}%<extra></extra>",
-                ))
-
-                fig_q.update_layout(
-                    barmode="group",
-                    template="plotly_white",
-                    paper_bgcolor=BG,
-                    plot_bgcolor=CARD_BG,
-                    height=max(300, len(q_df) * 60 + 100),
-                    margin=dict(l=500, r=30, t=30, b=40),
-                    xaxis=dict(
-                        title="Support %",
-                        range=[0, 100],
-                        gridcolor="#E8E4DC",
-                        title_font=dict(color=NAVY),
-                    ),
-                    yaxis=dict(
-                        autorange="reversed",
-                        tickfont=dict(size=10),
-                    ),
-                    legend=dict(
-                        orientation="h",
-                        yanchor="bottom",
-                        y=1.02,
-                        font=dict(size=10, color=NAVY),
-                    ),
-                    font=dict(family="DM Sans", color=NAVY),
-                    hovermode="closest",
-                )
-
-                st.plotly_chart(fig_q, use_container_width=True, key="il_question_bars_gauge")
+                q_df = pd.DataFrame(questions).sort_values("overall_support", ascending=False)
+                render_question_cards(q_df, key_prefix="gauge_detail")
 
     # ══════════════════════════════════════════════════════════════
     # ALL QUESTIONS RANKED (always shown in Consensus Gauge view)
@@ -503,8 +502,8 @@ if view_mode == "Consensus Gauge":
     st.divider()
     st.markdown("### All Questions Ranked")
     st.caption(
-        "Every individual survey question ranked by overall support. "
-        "Navy = overall public support. Gold = support among reform skeptics."
+        "Every individual survey question. Full text on top, support bars below. "
+        "Filter by topic or sort to find what you need."
     )
 
     # Build flat list of all individual questions from filtered topics
@@ -519,66 +518,46 @@ if view_mode == "Consensus Gauge":
                     "skeptic_support": q["skeptic_support"],
                     "n": q["n"],
                     "topic": topic_row_iter["topic"],
+                    "tier": topic_row_iter["tier"],
                 })
 
     if all_questions:
-        all_q_df = pd.DataFrame(all_questions).sort_values("overall_support", ascending=True)
-        # Cap at top 40 to keep page reasonable
-        all_q_df = all_q_df.tail(40)
+        all_q_df = pd.DataFrame(all_questions)
 
-        fig_dual = go.Figure()
+        # Sort and filter controls
+        flt_col1, flt_col2, flt_col3 = st.columns(3)
+        with flt_col1:
+            topic_filter_opts = ["All Topics"] + sorted(all_q_df["topic"].unique().tolist())
+            topic_filter_q = st.selectbox("Filter by Topic", topic_filter_opts, key="il_q_topic_filter")
+        with flt_col2:
+            sort_opts = ["Support % (high to low)", "Support % (low to high)", "Topic A-Z"]
+            sort_choice = st.selectbox("Sort By", sort_opts, key="il_q_sort")
+        with flt_col3:
+            consensus_filter = st.selectbox("Consensus Level", [
+                "All Levels", "Strong (75%+)", "Moderate (55-74%)", "Contested (below 55%)"
+            ], key="il_q_consensus")
 
-        fig_dual.add_trace(go.Bar(
-            y=all_q_df["text"],
-            x=all_q_df["overall_support"],
-            name="Overall Support",
-            orientation="h",
-            marker_color=NAVY,
-            text=all_q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
-            textposition="auto",
-            textfont=dict(color="white", size=10),
-            hovertemplate="%{y}<br>Overall: %{x:.1f}%<extra></extra>",
-        ))
+        # Apply filters
+        display_q = all_q_df.copy()
+        if topic_filter_q != "All Topics":
+            display_q = display_q[display_q["topic"] == topic_filter_q]
+        if consensus_filter == "Strong (75%+)":
+            display_q = display_q[display_q["overall_support"] >= 75]
+        elif consensus_filter == "Moderate (55-74%)":
+            display_q = display_q[(display_q["overall_support"] >= 55) & (display_q["overall_support"] < 75)]
+        elif consensus_filter == "Contested (below 55%)":
+            display_q = display_q[display_q["overall_support"] < 55]
 
-        skeptic_vals = all_q_df["skeptic_support"].fillna(0)
-        fig_dual.add_trace(go.Bar(
-            y=all_q_df["text"],
-            x=skeptic_vals,
-            name="Skeptic Support",
-            orientation="h",
-            marker_color=GOLD,
-            text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
-            textposition="auto",
-            textfont=dict(color=NAVY, size=10),
-            hovertemplate="%{y}<br>Skeptic: %{x:.1f}%<extra></extra>",
-        ))
+        # Apply sort
+        if sort_choice == "Support % (high to low)":
+            display_q = display_q.sort_values("overall_support", ascending=False)
+        elif sort_choice == "Support % (low to high)":
+            display_q = display_q.sort_values("overall_support", ascending=True)
+        else:
+            display_q = display_q.sort_values(["topic", "overall_support"], ascending=[True, False])
 
-        fig_dual.update_layout(
-            barmode="group",
-            template="plotly_white",
-            paper_bgcolor=BG,
-            plot_bgcolor=CARD_BG,
-            height=max(500, len(all_q_df) * 50 + 100),
-            margin=dict(l=500, r=30, t=30, b=50),
-            xaxis=dict(
-                title="Support %",
-                range=[0, 100],
-                gridcolor="#E8E4DC",
-                dtick=10,
-                title_font=dict(color=NAVY),
-            ),
-            yaxis=dict(tickfont=dict(size=10)),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                font=dict(size=12, color=NAVY),
-            ),
-            font=dict(family="DM Sans", color=NAVY),
-            hovermode="closest",
-        )
-
-        st.plotly_chart(fig_dual, use_container_width=True, key="il_dual_bar_gauge")
+        st.caption(f"Showing {len(display_q)} of {len(all_q_df)} questions")
+        render_question_cards(display_q.head(50), key_prefix="gauge_all")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -715,7 +694,7 @@ elif view_mode == "Scatter":
             c3.metric("Category", topic_row["quadrant"])
             c4.metric("Persuasion Tier", topic_row["tier"] if topic_row["tier"] else "—")
 
-            # Individual questions chart
+            # Individual questions
             questions = topic_row["questions"]
             if questions and len(questions) > 0:
                 st.markdown(
@@ -723,66 +702,20 @@ elif view_mode == "Scatter":
                     f'<strong>{len(questions)} survey questions</strong> in this topic</div>',
                     unsafe_allow_html=True,
                 )
-
-                q_df = pd.DataFrame(questions)
-
-                # Horizontal bar chart: overall support + skeptic support side by side
-                fig_q = go.Figure()
-
-                fig_q.add_trace(go.Bar(
-                    y=q_df["text"],
-                    x=q_df["overall_support"],
-                    name="Overall Support",
-                    orientation="h",
-                    marker_color=NAVY,
-                    text=q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
-                    textposition="auto",
-                    hovertemplate="%{y}<br>Overall: %{x:.0f}%<extra></extra>",
-                ))
-
-                skeptic_vals = q_df["skeptic_support"].fillna(0)
-                fig_q.add_trace(go.Bar(
-                    y=q_df["text"],
-                    x=skeptic_vals,
-                    name="Skeptic Support",
-                    orientation="h",
-                    marker_color=GOLD,
-                    text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
-                    textposition="auto",
-                    hovertemplate="%{y}<br>Skeptic: %{x:.0f}%<extra></extra>",
-                ))
-
-                fig_q.update_layout(
-                    barmode="group",
-                    template="plotly_white",
-                    paper_bgcolor=BG,
-                    plot_bgcolor=CARD_BG,
-                    height=max(250, len(q_df) * 55 + 80),
-                    margin=dict(l=500, r=30, t=30, b=40),
-                    xaxis=dict(title="Support %", range=[0, 100], gridcolor="#E8E4DC",
-                               title_font=dict(color=NAVY)),
-                    yaxis=dict(autorange="reversed", tickfont=dict(size=11)),
-                    legend=dict(
-                        orientation="h", yanchor="bottom", y=1.02,
-                        font=dict(size=11, color=NAVY),
-                    ),
-                    font=dict(family="DM Sans", color=NAVY),
-                )
-
-                st.plotly_chart(fig_q, use_container_width=True, key="il_question_bars_scatter")
+                q_df = pd.DataFrame(questions).sort_values("overall_support", ascending=False)
+                render_question_cards(q_df, key_prefix="scatter_detail")
 
     # ══════════════════════════════════════════════════════════════
-    # DUAL BAR — individual questions ranked (always shown below scatter)
+    # ALL QUESTIONS RANKED (always shown below scatter)
     # ══════════════════════════════════════════════════════════════
 
     st.divider()
     st.markdown("#### All Questions Ranked")
     st.caption(
-        "Every individual survey question ranked by overall support. "
-        "Navy = overall public support. Gold = support among reform skeptics."
+        "Every individual survey question. Full text on top, support bars below. "
+        "Filter by topic or sort to find what you need."
     )
 
-    # Build flat list of all individual questions from filtered topics
     all_questions = []
     for _, topic_row_iter in filtered.iterrows():
         questions_list = topic_row_iter.get("questions", [])
@@ -794,58 +727,43 @@ elif view_mode == "Scatter":
                     "skeptic_support": q["skeptic_support"],
                     "n": q["n"],
                     "topic": topic_row_iter["topic"],
+                    "tier": topic_row_iter["tier"],
                 })
 
     if all_questions:
-        all_q_df = pd.DataFrame(all_questions).sort_values("overall_support", ascending=True)
-        # Cap at top 40 to keep page reasonable
-        all_q_df = all_q_df.tail(40)
+        all_q_df = pd.DataFrame(all_questions)
 
-        fig_dual = go.Figure()
+        flt_c1, flt_c2, flt_c3 = st.columns(3)
+        with flt_c1:
+            t_opts = ["All Topics"] + sorted(all_q_df["topic"].unique().tolist())
+            t_filt = st.selectbox("Filter by Topic", t_opts, key="il_sq_topic")
+        with flt_c2:
+            s_opts = ["Support % (high to low)", "Support % (low to high)", "Topic A-Z"]
+            s_choice = st.selectbox("Sort By", s_opts, key="il_sq_sort")
+        with flt_c3:
+            c_filt = st.selectbox("Consensus Level", [
+                "All Levels", "Strong (75%+)", "Moderate (55-74%)", "Contested (below 55%)"
+            ], key="il_sq_consensus")
 
-        fig_dual.add_trace(go.Bar(
-            y=all_q_df["text"],
-            x=all_q_df["overall_support"],
-            name="Overall Support",
-            orientation="h",
-            marker_color=NAVY,
-            text=all_q_df["overall_support"].apply(lambda v: f"{v:.0f}%"),
-            textposition="auto",
-            textfont=dict(color="white", size=10),
-            hovertemplate="%{y}<br>Overall: %{x:.0f}%<extra></extra>",
-        ))
+        dq = all_q_df.copy()
+        if t_filt != "All Topics":
+            dq = dq[dq["topic"] == t_filt]
+        if c_filt == "Strong (75%+)":
+            dq = dq[dq["overall_support"] >= 75]
+        elif c_filt == "Moderate (55-74%)":
+            dq = dq[(dq["overall_support"] >= 55) & (dq["overall_support"] < 75)]
+        elif c_filt == "Contested (below 55%)":
+            dq = dq[dq["overall_support"] < 55]
 
-        skeptic_vals = all_q_df["skeptic_support"].fillna(0)
-        fig_dual.add_trace(go.Bar(
-            y=all_q_df["text"],
-            x=skeptic_vals,
-            name="Skeptic Support",
-            orientation="h",
-            marker_color=GOLD,
-            text=skeptic_vals.apply(lambda v: f"{v:.0f}%" if v > 0 else "—"),
-            textposition="auto",
-            textfont=dict(color=NAVY, size=10),
-            hovertemplate="%{y}<br>Skeptic: %{x:.0f}%<extra></extra>",
-        ))
+        if s_choice == "Support % (high to low)":
+            dq = dq.sort_values("overall_support", ascending=False)
+        elif s_choice == "Support % (low to high)":
+            dq = dq.sort_values("overall_support", ascending=True)
+        else:
+            dq = dq.sort_values(["topic", "overall_support"], ascending=[True, False])
 
-        fig_dual.update_layout(
-            barmode="group",
-            template="plotly_white",
-            paper_bgcolor=BG,
-            plot_bgcolor=CARD_BG,
-            height=max(500, len(all_q_df) * 40 + 100),
-            margin=dict(l=500, r=30, t=30, b=50),
-            xaxis=dict(title="Support %", range=[0, 100], gridcolor="#E8E4DC",
-                       dtick=10, title_font=dict(color=NAVY)),
-            yaxis=dict(tickfont=dict(size=10)),
-            legend=dict(
-                orientation="h", yanchor="bottom", y=1.02,
-                font=dict(size=12, color=NAVY),
-            ),
-            font=dict(family="DM Sans", color=NAVY),
-        )
-
-        st.plotly_chart(fig_dual, use_container_width=True, key="il_dual_bar_scatter")
+        st.caption(f"Showing {len(dq)} of {len(all_q_df)} questions")
+        render_question_cards(dq.head(50), key_prefix="scatter_all")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -865,7 +783,5 @@ elif view_mode == "Ranked List":
 
     st.dataframe(display_df, use_container_width=True, height=500)
 
-
-render_chat("issue_landscape")
 
 portal_footer()

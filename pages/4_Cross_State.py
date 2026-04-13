@@ -426,5 +426,4 @@ elif view_mode == "Heat Map":
     st.plotly_chart(fig, use_container_width=True, key="cs_heatmap")
 
 
-render_chat("cross_state")
 portal_footer()

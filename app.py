@@ -292,8 +292,5 @@ for idx, item in enumerate(nav_items):
         ):
             st.switch_page(item["page"])
 
-# ── AI Chat ──
-render_chat("home")
-
 # ── Footer ──
 portal_footer()

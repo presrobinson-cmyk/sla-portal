@@ -430,7 +430,7 @@ if has_source_inputs:
             context_parts.append(f"TARGET STATE: {target_state}")
 
         st.info(
-            "💡 **Tip**: Use the AI chat at the bottom of this page to generate questions. "
+            "💡 **Tip**: Copy the brief below and take it to the **AI Analysis** page to generate questions. "
             "Copy the brief below and paste it into the chat — it has access to all scored questions and frameworks."
         )
 
@@ -500,4 +500,3 @@ with st.expander("Question Design Methodology", expanded=False):
     """)
 
 portal_footer()
-render_chat("surveymaker")

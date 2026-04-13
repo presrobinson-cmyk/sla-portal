@@ -655,5 +655,4 @@ elif view_mode == "Demographic Profile":
         st.warning(f"No data available for {selected_subgroup}. This group may be underrepresented in the data.")
 
 
-render_chat("voter_segments")
 portal_footer()
