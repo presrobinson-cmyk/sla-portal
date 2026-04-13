@@ -26,6 +26,9 @@ try:
 except ImportError:
     SCORING_AVAILABLE = False
 
+# Shared data loader (MrP primary, raw fallback)
+from data_loader import load_question_data_hybrid, render_data_source_toggle, get_display_pct
+
 st.set_page_config(
     page_title="SurveyMaker — SLA Portal",
     page_icon="✏️",
@@ -40,41 +43,31 @@ username = require_auth("Second Look Alliance", accent_color=GOLD)
 # ─────────────────────────────────────────────────────────────────
 
 CONSTRUCT_LABELS = {
-    "CAND": "Candidate Favorability",
-    "PARTY": "Party Affiliation",
-    "TOUGHCRIME": "Tough on Crime",
-    "SENTENCING": "Sentencing & Incarceration",
-    "REDEMPTION": "Redemption & Second Chances",
-    "EXPUNGE": "Expungement & Record Clearing",
-    "SENTREVIEW": "Sentence Review & Commutation",
-    "POLICE": "Police Accountability",
-    "BAIL": "Bail & Pretrial Release",
-    "PAROLE": "Parole & Reentry",
-    "PROP": "Proposition/Vote Support",
-    "INVEST": "Investment in Services",
-    "LIT": "Litigation & Legal Framework",
-    "DV": "Domestic Violence Context",
-    "CAND_OTHER": "Other Candidate Items",
-    "COMPASS": "Compassion & Empathy",
-    "PUNITIVE": "Punitive Attitudes",
-    "PROBLEM_SOLVING": "Problem-Solving Approach",
-    "ISSUE_SALIENCE": "Issue Importance",
-    "IMPACT": "Personal Impact/Salience",
-    "COUNSEL_ACCESS": "Legal Counsel Access",
-    "JUDICIAL": "Judicial Discretion",
-    "COUNSEL_QUALITY": "Counsel Quality",
-    "PLEA": "Plea Bargaining",
-    "VICTIM": "Victim Support",
-    "RACE": "Race & Inequality",
-    "WEALTH": "Wealth Inequality",
-    "FINES": "Fines & Fees",
-    "TRUST": "Trust in System",
-    "FISCAL": "Fiscal Impact",
-    "DETERRENCE": "Deterrence Belief",
-    "REOFFEND": "Reoffending Risk",
-    "INCAP": "Incapacitation Benefit",
-    "CUSTOM": "Custom Question",
+    "PD_FUNDING": "Public Defender Funding", "INVEST": "Community Investment",
+    "LIT": "Literacy Programs", "COUNSEL_ACCESS": "Right to Counsel",
+    "DV": "Domestic Violence", "CAND-DV": "Candidates on DV",
+    "PROP": "Property Crime Reform", "REDEMPTION": "Redemption / Second Chances",
+    "EXPUNGE": "Record Expungement", "SENTREVIEW": "Sentence Review",
+    "JUDICIAL": "Judicial Discretion", "RETRO": "Retroactive Relief",
+    "FINES": "Fines & Fees", "MAND": "Mandatory Minimums",
+    "BAIL": "Bail Reform", "REENTRY": "Reentry Programs",
+    "RECORD": "Criminal Record Reform", "JUV": "Juvenile Justice",
+    "FAMILY": "Family Reunification", "ELDERLY": "Compassionate Release",
+    "COURT": "Court Reform", "COURTREVIEW": "Court Review Process",
+    "TRUST": "System Trust", "PLEA": "Plea Bargaining Reform",
+    "PROS": "Prosecutor Accountability", "CAND": "Candidate Favorability",
+    "TOUGHCRIME": "Tough on Crime Attitudes", "ISSUE_SALIENCE": "Issue Importance",
+    "IMPACT": "Personal Impact", "DETER": "Deterrence Beliefs",
+    "FISCAL": "Fiscal Responsibility", "DP_ABOLITION": "Death Penalty Abolition",
+    "DP_RELIABILITY": "Death Penalty Reliability", "LWOP": "Life Without Parole",
+    "COMPASSION": "Compassionate Release", "CLEMENCY": "Clemency",
+    "MENTAL_ADDICTION": "Mental Health & Addiction", "RACIAL_DISPARITIES": "Racial Disparities",
+    "GOODTIME": "Good Time Credits", "REVIEW": "Case Review",
+    "CONDITIONS": "Prison Conditions", "AGING": "Aging in Prison",
+    "PAROLE": "Parole Reform", "REVISIT": "Sentence Revisiting",
 }
+
+GAUGE_CONSTRUCTS = {"CAND", "TOUGHCRIME", "ISSUE_SALIENCE", "IMPACT"}
 
 # ─────────────────────────────────────────────────────────────────
 # PAGINATION HELPER
@@ -101,80 +94,57 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 # ─────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600)
-def load_and_score_questions():
-    """Load all scored questions from Supabase and compute support metrics."""
+def load_and_score_questions_cached():
+    """Load all scored questions using MrP-adjusted rates (primary), raw fallback."""
     try:
-        supabase_url, supabase_key = get_supabase_config()
-        headers = get_supabase_headers()
-
-        # Build filter for CJ surveys
-        survey_ids = [s["id"] for s in CJ_SURVEYS]
-        survey_filter = ",".join([f'"{sid}"' for sid in survey_ids])
-
-        # Fetch L2 responses
-        url = f"{supabase_url}/rest/v1/l2_responses?survey_id=in.({survey_filter})"
-        rows = _paginate(url, headers)
-
-        if not rows:
-            return pd.DataFrame()
-
-        df = pd.DataFrame(rows)
-
-        # Score responses
-        if SCORING_AVAILABLE:
-            df['scored_response'] = df['response'].apply(score_content)
-        else:
-            # Fallback: binary scoring
-            df['scored_response'] = df['response'].apply(
-                lambda x: 1 if x in ['Strongly Support', 'Support', 'Agree', 'Yes', 'Favorable'] else (
-                    0 if x in ['Strongly Oppose', 'Oppose', 'Disagree', 'No', 'Unfavorable'] else 0.5
-                )
-            )
-
-        # Compute aggregates by question
-        results = []
-        grouped = df.groupby('question_id').agg({
-            'scored_response': ['mean', 'count'],
-            'survey_id': 'first'
-        }).reset_index()
-
-        for _, row in grouped.iterrows():
-            qid = row['question_id']
-            overall_support = row['scored_response']['mean']
-            n_respondents = int(row['scored_response']['count'])
-
-            # Get construct and tier
-            construct = get_construct(qid) if SCORING_AVAILABLE else "CUSTOM"
-            tier = TIER_MAP.get(construct, "Unclassified")
-            topic_label = CONSTRUCT_LABELS.get(construct, construct)
-
-            # Get question text from original data
-            question_row = df[df['question_id'] == qid].iloc[0]
-            question_text = question_row.get('question_text', qid)
-
-            results.append({
-                'qid': qid,
-                'text': question_text,
-                'construct': construct,
-                'topic_label': topic_label,
-                'tier': tier,
-                'overall_support': overall_support,
-                'n_respondents': n_respondents,
-            })
-
-        result_df = pd.DataFrame(results)
-        return result_df.sort_values('overall_support', ascending=False)
-
+        question_data, mrp_coverage = load_question_data_hybrid()
+        return question_data
     except Exception as e:
         st.error(f"Error loading questions: {str(e)}")
+        return {}
+
+
+def load_and_score_questions(data_mode="mrp"):
+    """Build display-ready question dataframe, respecting MrP/raw toggle."""
+    question_data = load_and_score_questions_cached()
+    if not question_data:
         return pd.DataFrame()
+
+    results = []
+    for qid, qd in question_data.items():
+        construct = qd.get("construct", "")
+        if not construct or construct in GAUGE_CONSTRUCTS:
+            continue
+        tier = TIER_MAP.get(construct, "Unclassified")
+        topic_label = CONSTRUCT_LABELS.get(construct, construct)
+
+        results.append({
+            'qid': qid,
+            'text': qd["question_text"],
+            'construct': construct,
+            'topic_label': topic_label,
+            'tier': tier,
+            'overall_support': get_display_pct(qd, data_mode),
+            'n_respondents': qd["n_respondents"],
+            'source': "raw" if data_mode == "raw" else qd["source"],
+        })
+
+    if not results:
+        return pd.DataFrame()
+
+    result_df = pd.DataFrame(results)
+    return result_df.sort_values('overall_support', ascending=False)
 
 # ─────────────────────────────────────────────────────────────────
 # PAGE HEADER
 # ─────────────────────────────────────────────────────────────────
 
 st.title("SurveyMaker")
-data_source_badge("mrp")
+
+# MrP/Raw toggle
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
+
 st.markdown(
     "Browse scored questions from the question bank · filter by topic and persuasion tier · assemble surveys"
 )
@@ -186,7 +156,7 @@ st.divider()
 # ─────────────────────────────────────────────────────────────────
 
 with st.spinner("Loading question bank..."):
-    questions_df = load_and_score_questions()
+    questions_df = load_and_score_questions(data_mode=data_mode)
 
 if questions_df.empty:
     st.warning("No scored questions found. Please check your Supabase connection.")
@@ -245,11 +215,11 @@ if selected_tier != "All":
 
 # Support level filter
 if selected_support == "Strong Consensus (75%+)":
-    filtered_df = filtered_df[filtered_df['overall_support'] >= 0.75]
+    filtered_df = filtered_df[filtered_df['overall_support'] >= 75]
 elif selected_support == "Moderate (55-74%)":
-    filtered_df = filtered_df[(filtered_df['overall_support'] >= 0.55) & (filtered_df['overall_support'] < 0.75)]
+    filtered_df = filtered_df[(filtered_df['overall_support'] >= 55) & (filtered_df['overall_support'] < 75)]
 elif selected_support == "Contested (<55%)":
-    filtered_df = filtered_df[filtered_df['overall_support'] < 0.55]
+    filtered_df = filtered_df[filtered_df['overall_support'] < 55]
 
 # Sort
 if selected_sort == "Support % (descending)":
@@ -281,7 +251,7 @@ with col_left:
             'text', 'topic_label', 'tier', 'overall_support', 'n_respondents'
         ]].copy()
         display_df.columns = ['Question', 'Topic', 'Tier', 'Support %', 'N']
-        display_df['Support %'] = (display_df['Support %'] * 100).round(1).astype(str) + "%"
+        display_df['Support %'] = display_df['Support %'].round(1).astype(str) + "%"
 
         # Interactive selection
         selected_idx = st.selectbox(
@@ -307,7 +277,7 @@ with col_right:
 
     st.metric("Total Questions", total_qs)
     st.metric("Topics Covered", total_topics)
-    st.metric("Avg Support", f"{avg_support*100:.1f}%")
+    st.metric("Avg Support", f"{avg_support:.1f}%")
 
 # ─────────────────────────────────────────────────────────────────
 # QUESTION DETAIL VIEW
@@ -340,7 +310,7 @@ with detail_col1:
 
 with detail_col2:
     st.markdown("#### Support Metrics")
-    support_pct = selected_question['overall_support'] * 100
+    support_pct = selected_question['overall_support']
     st.metric("Overall Support", f"{support_pct:.1f}%")
     st.metric("Respondents", f"{selected_question['n_respondents']:,}")
 
@@ -454,9 +424,9 @@ st.divider()
 
 st.markdown("### Survey Assembly")
 
-n_strong = len(questions_df[questions_df['overall_support'] >= 0.75])
-n_moderate = len(questions_df[(questions_df['overall_support'] >= 0.55) & (questions_df['overall_support'] < 0.75)])
-n_contested = len(questions_df[questions_df['overall_support'] < 0.55])
+n_strong = len(questions_df[questions_df['overall_support'] >= 75])
+n_moderate = len(questions_df[(questions_df['overall_support'] >= 55) & (questions_df['overall_support'] < 75)])
+n_contested = len(questions_df[questions_df['overall_support'] < 55])
 
 st.markdown(f"""
 Question bank includes **{len(questions_df)} scored questions** across **{questions_df['topic_label'].nunique()} topics**.

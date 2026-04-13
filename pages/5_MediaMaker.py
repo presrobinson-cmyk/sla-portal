@@ -16,6 +16,7 @@ from theme import (
 )
 from auth import require_auth
 from chat_widget import render_chat
+from data_loader import render_data_source_toggle
 
 st.set_page_config(
     page_title="MediaMaker — SLA Portal",
@@ -278,15 +279,79 @@ FRAMEWORK_MAP = {
 }
 
 # ─────────────────────────────────────────────────────────────────
+# SUGGESTED TARGET AUDIENCE BY TOPIC
+# Based on persuasion tier: Entry topics target broad audiences,
+# Bridge topics target persuadable skeptics, Downstream targets
+# base mobilization + swing voters.
+# ─────────────────────────────────────────────────────────────────
+
+SUGGESTED_AUDIENCE = {
+    # Entry tier — broad bipartisan appeal, good for general public + legislators
+    "PD_FUNDING": "State legislators",
+    "INVEST": "General public",
+    "LIT": "General public",
+    "COUNSEL_ACCESS": "State legislators",
+    # Bridge tier — these are persuasion tools, target skeptics
+    "DV": "Republican persuadables",
+    "COMPASSION": "Republican persuadables",
+    "FINES": "Independent / swing voters",
+    "CAND-DV": "Republican persuadables",
+    # Downstream tier — needs setup from upstream, target swing + base
+    "PROP": "Independent / swing voters",
+    "REDEMPTION": "Independent / swing voters",
+    "EXPUNGE": "Grassroots advocates / organizers",
+    "SENTREVIEW": "State legislators",
+    "JUDICIAL": "State legislators",
+    "RETRO": "Grassroots advocates / organizers",
+    "MAND": "Independent / swing voters",
+    "BAIL": "Local media / editorial boards",
+    "REENTRY": "Donors and funders",
+    "RECORD": "Independent / swing voters",
+    "JUV": "General public",
+    "FAMILY": "Democratic base (mobilization)",
+    "ELDERLY": "Republican persuadables",
+    "COURT": "State legislators",
+    "TRUST": "General public",
+    "PLEA": "Local media / editorial boards",
+    "PROS": "Grassroots advocates / organizers",
+}
+
+AUDIENCE_RATIONALE = {
+    "General public": "This topic has broad appeal across party lines — wide distribution works.",
+    "Republican persuadables": "Polling shows this topic moves skeptics. Target moderate Republicans and conservative-leaning independents.",
+    "Democratic base (mobilization)": "Strong base support — use for turnout and mobilization, not persuasion.",
+    "Independent / swing voters": "This topic is a swing-voter wedge. Focus on voters who haven't formed strong opinions yet.",
+    "State legislators": "High bipartisan support makes this ripe for legislative action. Lead with the numbers.",
+    "Local media / editorial boards": "This topic benefits from earned media. Frame for journalists and opinion writers.",
+    "Grassroots advocates / organizers": "Use this topic to energize organizing efforts and coalition-building.",
+    "Donors and funders": "Strong evidence base makes this a compelling investment case for reform funders.",
+}
+
+# ─────────────────────────────────────────────────────────────────
 # PAGE HEADER
 # ─────────────────────────────────────────────────────────────────
 
 st.title("MediaMaker")
-data_source_badge("mrp")
-st.markdown(
-    "Select a reform topic → see evidence-based messaging guidance to persuade your audience.",
-    unsafe_allow_html=True,
-)
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
+
+st.markdown(f"""
+<div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:10px;padding:1.25rem;
+     margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+    <div style="font-size:0.95rem;color:{TEXT1};line-height:1.7;">
+        <strong>How MediaMaker works:</strong> Pick a reform topic and MediaMaker pulls from our
+        MrP-adjusted polling data to show you what language resonates and what backfires.
+        Each topic has a <strong>Data Anchor</strong> (the number that opens the door),
+        a <strong>Strategic Frame</strong> (how to position it), an <strong>Inoculation</strong>
+        (the attack line and your counter), and a <strong>Call to Action</strong>.
+    </div>
+    <div style="font-size:0.85rem;color:{TEXT2};margin-top:0.5rem;">
+        In Step 4, paste in a bill, news article, or list of spokespeople — MediaMaker
+        will combine your source materials with the polling guidance to generate a tailored brief
+        you can take to the AI Analysis page for final content.
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -550,20 +615,34 @@ with input_col2:
     st.markdown(f"""
     <div style="font-weight:600;color:{NAVY};margin-bottom:0.5rem;margin-top:1rem;">🎯 Target Audience</div>
     """, unsafe_allow_html=True)
+
+    audience_options = [
+        "General public",
+        "Republican persuadables",
+        "Democratic base (mobilization)",
+        "Independent / swing voters",
+        "State legislators",
+        "Local media / editorial boards",
+        "Grassroots advocates / organizers",
+        "Donors and funders",
+    ]
+    suggested = SUGGESTED_AUDIENCE.get(selected_construct, "General public")
+    suggested_idx = audience_options.index(suggested) if suggested in audience_options else 0
+    rationale = AUDIENCE_RATIONALE.get(suggested, "")
+
     audience = st.selectbox(
         "Who is this communication for?",
-        [
-            "General public",
-            "Republican persuadables",
-            "Democratic base (mobilization)",
-            "Independent / swing voters",
-            "State legislators",
-            "Local media / editorial boards",
-            "Grassroots advocates / organizers",
-            "Donors and funders",
-        ],
+        audience_options,
+        index=suggested_idx,
         key="mm_audience",
     )
+    if rationale:
+        st.markdown(f"""
+        <div style="font-size:0.78rem;color:{TEXT3};margin-top:-0.5rem;padding:0.3rem 0.5rem;
+             background:rgba(14,31,61,0.04);border-radius:6px;">
+            💡 <strong>Suggested for {selected_label}:</strong> {rationale}
+        </div>
+        """, unsafe_allow_html=True)
 
     output_format = st.selectbox(
         "Output format",

@@ -37,7 +37,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_question_data_hybrid, load_party_splits
+from data_loader import load_question_data_hybrid, load_party_splits, render_data_source_toggle, get_display_pct
 
 st.set_page_config(
     page_title="Issue Landscape — SLA Portal",
@@ -131,15 +131,19 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading survey data...")
-def load_question_data():
+def load_question_data_cached():
     """Load all question-level data using MrP-adjusted rates (primary)
     with raw fallback for surveys not yet in MrP.
-    Returns a dict keyed by QID with per-question stats.
+    Returns (question_data dict, party_data dict, mrp_coverage dict).
     """
     question_data, mrp_coverage = load_question_data_hybrid()
     party_data = load_party_splits()
+    return question_data, party_data, mrp_coverage
 
-    # Store coverage info in session state for badge display
+
+def load_question_data(mode="mrp"):
+    """Build display-ready question data, applying the MrP/raw toggle."""
+    question_data, party_data, mrp_coverage = load_question_data_cached()
     st.session_state["mrp_coverage"] = mrp_coverage
 
     result = {}
@@ -147,11 +151,11 @@ def load_question_data():
         party = party_data.get(qid, {})
         result[qid] = {
             "skeptic_support": party.get("r_pct"),  # Republican rate (always raw — party not in MrP cells)
-            "overall_support": qd["display_pct"],    # MrP-adjusted when available
+            "overall_support": get_display_pct(qd, mode),  # Respects toggle
             "construct": qd["construct"],
             "text": qd["question_text"],
             "n": qd["n_respondents"],
-            "source": qd["source"],                  # "mrp", "raw", or "mixed"
+            "source": "raw" if mode == "raw" else qd["source"],
         }
     return result
 
@@ -290,7 +294,11 @@ def render_question_cards(q_df, key_prefix="qcard"):
 # ══════════════════════════════════════════════════════════════════
 
 st.title("⚡ Issue Landscape")
-data_source_badge("mrp")
+
+# MrP/Raw toggle (sidebar) — must come before data load so mode is set
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
+
 st.caption(
     "Each dot is a reform topic. Upper-right (Golden Zone) = broad bipartisan support. "
     "Hover any dot for details. Switch views in the sidebar for ranked lists and consensus gauges."
@@ -301,7 +309,7 @@ if not SCORING_AVAILABLE:
     st.stop()
 
 # Load and aggregate
-question_data = load_question_data()
+question_data = load_question_data(mode=data_mode)
 topics = aggregate_to_topics(question_data)
 
 if not topics:

@@ -24,6 +24,50 @@ except ImportError:
 
 
 # ══════════════════════════════════════════════════════════════════
+# MrP / RAW TOGGLE HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+def render_data_source_toggle():
+    """Render a sidebar toggle for MrP vs Raw data display.
+    Returns the current selection: "mrp" or "raw".
+    Persists in session_state so it stays consistent across pages.
+    """
+    if "data_source_mode" not in st.session_state:
+        st.session_state["data_source_mode"] = "mrp"
+
+    with st.sidebar:
+        st.markdown("### Data Source")
+        choice = st.radio(
+            "Display numbers as:",
+            ["MrP-Adjusted", "Raw Survey"],
+            index=0 if st.session_state["data_source_mode"] == "mrp" else 1,
+            key="_data_source_radio",
+            help=(
+                "**MrP-Adjusted**: Population-weighted estimates using multilevel "
+                "regression with poststratification. More accurate for state-level "
+                "inference.\n\n"
+                "**Raw Survey**: Direct response tallies without modeling adjustment."
+            ),
+        )
+        mode = "mrp" if choice == "MrP-Adjusted" else "raw"
+        st.session_state["data_source_mode"] = mode
+        st.divider()
+
+    return mode
+
+
+def get_display_pct(qd, mode="mrp"):
+    """Pick the right percentage to display given the toggle mode.
+    qd: a question_data dict with mrp_pct and raw_pct keys.
+    mode: "mrp" or "raw".
+    """
+    if mode == "raw":
+        return qd.get("raw_pct") if qd.get("raw_pct") is not None else qd.get("mrp_pct")
+    else:
+        return qd.get("mrp_pct") if qd.get("mrp_pct") is not None else qd.get("raw_pct")
+
+
+# ══════════════════════════════════════════════════════════════════
 # PAGINATION HELPER
 # ══════════════════════════════════════════════════════════════════
 

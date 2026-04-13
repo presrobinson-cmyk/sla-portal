@@ -22,7 +22,7 @@ from chat_widget import render_chat
 # Theme
 from theme import (
     apply_theme, portal_footer, data_source_badge, get_supabase_config, get_supabase_headers,
-    CJ_SURVEYS, SURVEY_STATE, TIER_MAP,
+    CJ_SURVEYS, SURVEY_STATE, TIER_MAP, TIER_STYLES,
     NAVY, NAVY2, GOLD, GOLD_MID, TEXT1, TEXT2, TEXT3, BORDER2, BG, CARD_BG,
 )
 
@@ -35,7 +35,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary for Overall column)
-from data_loader import load_question_data_hybrid
+from data_loader import load_question_data_hybrid, render_data_source_toggle, get_display_pct
 
 st.set_page_config(page_title="Voter Segments — SLA Portal", page_icon="🎯", layout="wide")
 
@@ -175,7 +175,7 @@ def _map_gender(gender):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading Coalition Heatmap™ data...")
-def load_segment_data():
+def load_segment_data(data_mode="mrp"):
     """
     Pull L2 responses and L1 demographics, score each response,
     compute support rates by construct and demographic subgroup.
@@ -274,20 +274,21 @@ def load_segment_data():
                 construct_subgroup_stats[construct][subgroup]["fav"] += s["fav"]
                 construct_subgroup_stats[construct][subgroup]["n"] += 1
 
-    # Load MrP-adjusted rates for Overall column
-    mrp_question_data, _mrp_cov = load_question_data_hybrid()
-    # Aggregate MrP rates by construct (weighted average)
+    # Load MrP-adjusted rates for Overall column (when in MrP mode)
     mrp_construct_overall = {}
-    _c_agg = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0})
-    for qid, qd in mrp_question_data.items():
-        c = qd.get("construct")
-        if c and qd["display_pct"] is not None:
-            n = qd["n_respondents"]
-            _c_agg[c]["sum_pct_n"] += qd["display_pct"] * n
-            _c_agg[c]["sum_n"] += n
-    for c, agg in _c_agg.items():
-        if agg["sum_n"] > 0:
-            mrp_construct_overall[c] = agg["sum_pct_n"] / agg["sum_n"]
+    if data_mode == "mrp":
+        mrp_question_data, _mrp_cov = load_question_data_hybrid()
+        # Aggregate MrP rates by construct (weighted average)
+        _c_agg = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0})
+        for qid, qd in mrp_question_data.items():
+            c = qd.get("construct")
+            if c and qd["mrp_pct"] is not None:
+                n = qd["n_respondents"]
+                _c_agg[c]["sum_pct_n"] += qd["mrp_pct"] * n
+                _c_agg[c]["sum_n"] += n
+        for c, agg in _c_agg.items():
+            if agg["sum_n"] > 0:
+                mrp_construct_overall[c] = agg["sum_pct_n"] / agg["sum_n"]
 
     # Build heatmap data: exclude GAUGE_CONSTRUCTS
     heatmap_data = {}
@@ -298,11 +299,11 @@ def load_segment_data():
         row = {}
         for subgroup in DEMOGRAPHIC_SUBGROUPS:
             if subgroup == "Overall":
-                # Use MrP-adjusted rate for Overall if available
+                # Use MrP-adjusted rate for Overall if available and in MrP mode
                 mrp_rate = mrp_construct_overall.get(construct)
                 raw_stats = subgroup_stats.get("Overall", {"fav": 0, "n": 0})
                 n = raw_stats["n"]
-                if mrp_rate is not None and n >= 30:
+                if mrp_rate is not None and data_mode == "mrp" and n >= 30:
                     row[subgroup] = {"pct": mrp_rate, "n": n}
                 elif n >= 30:
                     row[subgroup] = {"pct": raw_stats["fav"] / n * 100, "n": n}
@@ -354,7 +355,11 @@ def get_cell_color(support_pct):
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🎯 Voter Segments")
-data_source_badge("mrp")
+
+# MrP/Raw toggle
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
+
 st.markdown(
     "Support rates for criminal justice reform topics broken down by demographic subgroups. "
     "Green indicates strong support (75%+), gold moderate support (60-74%), and red opposition (below 50%). "
@@ -365,7 +370,7 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot compute support rates.")
     st.stop()
 
-heatmap_data = load_segment_data()
+heatmap_data = load_segment_data(data_mode=data_mode)
 
 if not heatmap_data:
     st.warning("No Coalition Heatmap data available.")

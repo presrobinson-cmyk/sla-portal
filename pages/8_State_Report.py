@@ -28,7 +28,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_state_question_data, _paginate as paginate_supabase
+from data_loader import load_state_question_data, _paginate as paginate_supabase, render_data_source_toggle, get_display_pct
 
 # Human-readable topic names
 CONSTRUCT_LABELS = {
@@ -111,7 +111,9 @@ for i, abbr in enumerate(all_active_abbrs):
             st.rerun()
 
 st.markdown("")  # spacing
-data_source_badge("mrp")
+# MrP/Raw toggle
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
 
 state_name = ABBR_TO_STATE.get(selected_abbr, selected_abbr)
 state_color = STATE_COLORS.get(state_name, "#8C8984")
@@ -127,7 +129,7 @@ if not SCORING_AVAILABLE:
 # ─────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner="Loading state data...")
-def load_state_data(state_survey_ids):
+def load_state_data(state_survey_ids, data_mode="mrp"):
     """Load state data using MrP-adjusted rates (primary), raw fallback.
     Returns respondent_counts, questions, topics.
     """
@@ -152,13 +154,14 @@ def load_state_data(state_survey_ids):
     # Build question list
     questions = []
     for qid, qd in question_data.items():
+        pct = get_display_pct(qd, data_mode)
         questions.append({
             "qid": qid,
             "construct": qd["construct"],
             "text": qd["question_text"],
-            "support_pct": qd["display_pct"],
+            "support_pct": pct,
             "n": qd["n_respondents"],
-            "source": qd["source"],
+            "source": "raw" if data_mode == "raw" else qd["source"],
         })
 
     # Aggregate to construct (topic) level — weighted average
@@ -166,7 +169,8 @@ def load_state_data(state_survey_ids):
     for qid, qd in question_data.items():
         c = qd["construct"]
         n = qd["n_respondents"]
-        c_agg[c]["sum_pct_n"] += qd["display_pct"] * n
+        pct = get_display_pct(qd, data_mode)
+        c_agg[c]["sum_pct_n"] += pct * n
         c_agg[c]["sum_n"] += n
         c_agg[c]["qids"].add(qid)
 
@@ -185,7 +189,7 @@ def load_state_data(state_survey_ids):
 
 
 with st.spinner("Loading state data..."):
-    respondent_counts, questions, topics = load_state_data(tuple(state_surveys))
+    respondent_counts, questions, topics = load_state_data(tuple(state_surveys), data_mode=data_mode)
 
 total_respondents = sum(respondent_counts.values())
 

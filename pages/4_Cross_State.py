@@ -30,7 +30,7 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_mrp_question_summary, _paginate as paginate_supabase
+from data_loader import load_mrp_question_summary, _paginate as paginate_supabase, render_data_source_toggle
 
 # Human-readable construct names
 CONSTRUCT_LABELS = {
@@ -82,10 +82,11 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading cross-state data...")
-def load_cross_state_data():
+def load_cross_state_data(data_mode="mrp"):
     """Load cross-state comparison data.
     Uses MrP-adjusted rates from mrp_question_summary when available,
     falls back to raw L2 scoring for surveys not yet through MrP.
+    When data_mode="raw", uses raw_pct from MrP table (or runtime scoring).
     """
     # Step 1: Load MrP data (keyed by (survey_id, question_id))
     mrp_data, mrp_surveys = load_mrp_question_summary()
@@ -143,12 +144,13 @@ def load_cross_state_data():
             continue
         if qid in SKIPPED_QIDS:
             continue
+        pct_value = row["mrp_pct"] if data_mode == "mrp" else row.get("raw_pct", row["mrp_pct"])
         state_question_merged[state][qid] = {
-            "pct": row["mrp_pct"],
+            "pct": pct_value,
             "n": row.get("n_respondents", 0),
             "text": row.get("question_text", ""),
             "construct": construct,
-            "source": "mrp",
+            "source": "mrp" if data_mode == "mrp" else "raw",
         }
         respondent_counts[state] = max(respondent_counts[state], row.get("n_respondents", 0))
 
@@ -252,7 +254,11 @@ def load_cross_state_data():
 # ══════════════════════════════════════════════════════════════════
 
 st.title("🗺️ Cross-State Comparison")
-data_source_badge("mrp")
+
+# MrP/Raw toggle
+data_mode = render_data_source_toggle()
+data_source_badge(data_mode)
+
 st.markdown(
     "Compare reform polling results across states. See which messages transfer "
     "across state lines and which need local adaptation."
@@ -262,7 +268,7 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
     st.stop()
 
-topic_matrix, multi_state_questions, all_states, state_counts = load_cross_state_data()
+topic_matrix, multi_state_questions, all_states, state_counts = load_cross_state_data(data_mode=data_mode)
 
 if not topic_matrix:
     st.warning("Not enough multi-state data available yet.")
