@@ -873,7 +873,7 @@ _COMPOUND_CONSTRUCT = {
     # Apr 10 2026 restructure (Preston) — explicit QID overrides
     # ══════════════════════════════════════════════════════════════════════
     # ── Apr 10 2026 (Preston, post-cluster verification) ──────────────────
-    # REPRESENTATION split into PD_FUNDING + COUNSEL_ACCESS, both Axis 3.
+    # REPRESENTATION split into PD_FUNDING + COUNSEL_ACCESS.
     # Empirical basis: cross-facet correlations between PD-funding items and
     # COUNSEL items are r ≈ 0.01–0.05 (essentially zero). VA-COUNSEL1 and
     # VA-COUNSEL2 correlate r = 0.22 — weak but non-zero, kept together by
@@ -964,7 +964,7 @@ _Q_SERIES_CONSTRUCT = {
     "CJ-Q119": "JUV",
     "CJ-Q124": "INVEST",
     "CJ-Q130": "MENTAL_ADDICTION",  # Apr 10: was TREATMENT — absorbed into MENTAL_ADDICTION
-    "CJ-Q142": "PROP",  # Apr 10: was CLASS — item is felony-classification severity tiers, belongs on Axis 3 proportionality
+    "CJ-Q142": "PROP",  # Apr 10: was CLASS — felony-classification severity tiers; PROP construct
     "CJ-Q189": "MENTAL_ADDICTION",  # Apr 10: absorbed
     "CJ-Q190": "MENTAL_ADDICTION",  # Apr 10: absorbed
     "CJ-Q193": "MENTAL_ADDICTION",  # Apr 10: absorbed

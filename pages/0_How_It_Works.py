@@ -214,9 +214,12 @@ with col_mrp:
         Raw survey results are biased. Who responds to a poll is never a perfect mirror of
         who actually votes. MrP — Multilevel Regression with Poststratification — fixes that.<br><br>
         It models how each demographic cell (age × education × race × gender) responds,
-        then weights those estimates to match the real population of voters in each state.<br><br>
+        then weights those estimates to match the actual Census population of each state —
+        not a voter file, but the real demographic composition drawn from U.S. Census ACS data.<br><br>
         Every percentage you see in this portal is MrP-adjusted by default. That means you're
         looking at what the electorate actually thinks — not an artifact of who picked up the phone.
+        Coming soon: customizable weighting so partners can tune the demographic assumptions
+        to their specific district or target audience.
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -373,8 +376,9 @@ with mrp_col1:
       support figure may actually be 58% or 67% when corrected for who really votes.<br><br>
       <strong style="color:{NAVY};">What MrP does:</strong> It builds a model that predicts
       each demographic cell's response rate, then poststratifies — weighting cells to match
-      the actual composition of the voting population in each state. The result is an estimate
-      of what the full electorate thinks, not just the subset who answered.
+      the actual Census composition of each state (U.S. Census ACS tables: race/ethnicity,
+      age, education, gender). The result is an estimate of what the full population thinks,
+      not just the subset who answered.
     </div>
     """, unsafe_allow_html=True)
 
