@@ -1013,16 +1013,14 @@ elif view_mode == "Scatter":
     selected = st.plotly_chart(fig, use_container_width=True, on_select="rerun", key="il_scatter")
 
     # ── Detect which topic was clicked ──
+    # hover_data order: overall_support[0], skeptic_support[1], n_questions[2],
+    #   tier[3], quadrant[4], construct[5], n_respondents[6], topic[7], questions[8]
     selected_construct = None
     if selected and selected.selection and selected.selection.points:
         pt = selected.selection.points[0]
-        idx = pt.get("point_index")
-        curve = pt.get("curve_number", 0)
-        quads = sorted(filtered["quadrant"].unique())
-        if curve < len(quads):
-            sub = filtered[filtered["quadrant"] == quads[curve]]
-            if idx is not None and idx < len(sub):
-                selected_construct = sub.iloc[idx]["construct"]
+        cd = pt.get("customdata")
+        if cd and len(cd) > 5:
+            selected_construct = cd[5]
 
     # Also allow dropdown selection
     topic_opts = sorted(filtered["topic"].tolist())
@@ -1273,7 +1271,7 @@ elif view_mode == "MPT View":
             "conservative_support": "Conservative Support %",
             "quadrant": "Quadrant",
         },
-        custom_data=["topic", "tier", "n_conservative"],
+        custom_data=["construct", "topic", "tier", "n_conservative"],
     )
 
     for i, trace in enumerate(fig_mpt.data):
@@ -1353,16 +1351,13 @@ elif view_mode == "MPT View":
         """, unsafe_allow_html=True)
 
     # ── Detect clicked dot ──
+    # customdata = [construct, topic, tier, n_conservative] — index 0 is construct
     selected_mpt_construct = None
     if selected_mpt and selected_mpt.selection and selected_mpt.selection.points:
         pt = selected_mpt.selection.points[0]
-        idx = pt.get("point_index")
-        curve = pt.get("curve_number", 0)
-        quads_mpt = sorted(mpt_df["quadrant"].unique())
-        if curve < len(quads_mpt):
-            sub_mpt = mpt_df[mpt_df["quadrant"] == quads_mpt[curve]]
-            if idx is not None and idx < len(sub_mpt):
-                selected_mpt_construct = sub_mpt.iloc[idx]["construct"]
+        cd = pt.get("customdata")
+        if cd and len(cd) > 0:
+            selected_mpt_construct = cd[0]
 
     # ── Per-topic detail (click or dropdown) ──
     st.divider()
@@ -1506,7 +1501,7 @@ elif view_mode == "Durability View":
             "cb_score": "Cross-Partisan Score %",
             "quadrant": "Quadrant",
         },
-        custom_data=["topic", "tier", "n_items"],
+        custom_data=["construct", "topic", "tier", "n_items"],
     )
 
     for i, trace in enumerate(fig_dur.data):
@@ -1584,16 +1579,13 @@ elif view_mode == "Durability View":
         """, unsafe_allow_html=True)
 
     # ── Detect clicked dot ──
+    # customdata = [construct, topic, tier, n_items] — index 0 is construct
     selected_dur_construct = None
     if selected_dur and selected_dur.selection and selected_dur.selection.points:
         pt = selected_dur.selection.points[0]
-        idx = pt.get("point_index")
-        curve = pt.get("curve_number", 0)
-        quads_dur = sorted(dur_df["quadrant"].unique())
-        if curve < len(quads_dur):
-            sub_dur = dur_df[dur_df["quadrant"] == quads_dur[curve]]
-            if idx is not None and idx < len(sub_dur):
-                selected_dur_construct = sub_dur.iloc[idx]["construct"]
+        cd = pt.get("customdata")
+        if cd and len(cd) > 0:
+            selected_dur_construct = cd[0]
 
     # ── Per-topic detail (click or dropdown) ──
     st.divider()
