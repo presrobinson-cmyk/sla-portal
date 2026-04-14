@@ -221,42 +221,40 @@ STARTER_QUESTIONS = {
 
 def render_chat(page_key: str = "home"):
     """
-    Render the AI chat widget. Call this on every page.
+    Render the AI chat widget in the sidebar so it's always on screen.
+    Sidebar content added by the page (filters, toggles) appears above this;
+    the chat stacks below and is always visible regardless of page scroll position.
 
     Args:
         page_key: One of the keys in PAGE_CONTEXT / STARTER_QUESTIONS
     """
     _chat_css()
 
-    # Initialize chat history in session state (shared across pages)
+    # Initialize chat history in session state (persists across pages)
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
 
-    st.divider()
+    with st.sidebar:
+        st.divider()
 
-    # Chat input FIRST — this is the main feature
-    if prompt := st.chat_input("💬 Ask about the data...", key=f"chat_input_{page_key}"):
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
-
-        # Get AI response
-        context = PAGE_CONTEXT.get(page_key, "")
-        api_messages = [{"role": m["role"], "content": m["content"]}
-                        for m in st.session_state.chat_messages]
-        response = _call_claude(api_messages, context)
-        st.session_state.chat_messages.append({"role": "assistant", "content": response})
-        st.rerun()
-
-    # Starter suggestions if no messages yet
-    starters = STARTER_QUESTIONS.get(page_key, STARTER_QUESTIONS["home"])
-    if not st.session_state.chat_messages:
         st.markdown(f"""
-        <div style="font-size:0.82rem;color:{TEXT3};margin-bottom:8px;margin-top:4px;">
-            💬 <strong style="color:{NAVY};">Ask the Data</strong> — try one of these:
+        <div class="chat-header">
+            <span style="font-size:1.1rem;">💬</span>
+            <div>
+                <div class="chat-header-title">Ask the Data</div>
+                <div class="chat-header-sub">AI research assistant</div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
-        cols = st.columns(len(starters))
-        for i, (col, q) in enumerate(zip(cols, starters)):
-            with col:
+
+        # Starter suggestions when no conversation yet
+        starters = STARTER_QUESTIONS.get(page_key, STARTER_QUESTIONS["home"])
+        if not st.session_state.chat_messages:
+            st.markdown(
+                f'<div style="font-size:0.78rem;color:{TEXT3};margin-bottom:6px;">Try asking:</div>',
+                unsafe_allow_html=True,
+            )
+            for i, q in enumerate(starters):
                 if st.button(q, key=f"starter_{page_key}_{i}", use_container_width=True):
                     st.session_state.chat_messages.append({"role": "user", "content": q})
                     context = PAGE_CONTEXT.get(page_key, "")
@@ -266,14 +264,22 @@ def render_chat(page_key: str = "home"):
                     st.session_state.chat_messages.append({"role": "assistant", "content": response})
                     st.rerun()
 
-    # Display chat history
-    if st.session_state.chat_messages:
-        for msg in st.session_state.chat_messages:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
+        # Chat input — always present
+        if prompt := st.chat_input("Ask about the data...", key=f"chat_input_{page_key}"):
+            st.session_state.chat_messages.append({"role": "user", "content": prompt})
+            context = PAGE_CONTEXT.get(page_key, "")
+            api_messages = [{"role": m["role"], "content": m["content"]}
+                            for m in st.session_state.chat_messages]
+            response = _call_claude(api_messages, context)
+            st.session_state.chat_messages.append({"role": "assistant", "content": response})
+            st.rerun()
 
-        col1, col2, col3 = st.columns([4, 1, 4])
-        with col2:
+        # Message history (most recent first, capped to avoid sidebar overflow)
+        if st.session_state.chat_messages:
+            for msg in reversed(st.session_state.chat_messages[-10:]):
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
             if st.button("Clear chat", key=f"clear_{page_key}", use_container_width=True):
                 st.session_state.chat_messages = []
                 st.rerun()
