@@ -37,7 +37,9 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_question_data_hybrid, load_party_splits, render_data_source_toggle, get_display_pct
+from data_loader import (load_question_data_hybrid, load_party_splits,
+                         render_data_source_toggle, get_display_pct,
+                         render_state_selector)
 
 # New loaders added in Session 5 — defensive import so old deploys don't crash
 try:
@@ -141,14 +143,15 @@ def _paginate(url_base, headers, limit=1000, max_rows=200000):
 
 
 @st.cache_data(ttl=604800, show_spinner="Loading survey data...")
-def load_question_data_cached():
-    """Load all question-level data using MrP-adjusted rates (primary)
+def load_question_data_cached(survey_ids=None):
+    """Load question-level data using MrP-adjusted rates (primary)
     with raw fallback for surveys not yet in MrP.
+    survey_ids: tuple of survey IDs to filter to, or None for all CJ surveys.
     Returns (question_data dict, demo_data dict, mrp_coverage dict).
     """
-    question_data, mrp_coverage = load_question_data_hybrid()
+    question_data, mrp_coverage = load_question_data_hybrid(survey_ids=survey_ids)
     try:
-        demo_data = load_demo_splits()
+        demo_data = load_demo_splits(survey_ids=survey_ids)
     except Exception:
         demo_data = {}  # Demographic splits unavailable — page still loads
     return question_data, demo_data, mrp_coverage
@@ -221,10 +224,12 @@ def compute_intersection_support(demo_lookup, scored_responses, group_keys):
     }
 
 
-def load_question_data(mode="mrp", subgroup_key="r"):
+def load_question_data(mode="mrp", subgroup_key="r", survey_ids=None):
     """Build display-ready question data, applying the MrP/raw toggle
-    and the selected demographic subgroup for the skeptic/X axis."""
-    question_data, demo_data, mrp_coverage = load_question_data_cached()
+    and the selected demographic subgroup for the skeptic/X axis.
+    survey_ids: tuple of survey IDs to filter to, or None for all CJ surveys.
+    """
+    question_data, demo_data, mrp_coverage = load_question_data_cached(survey_ids=survey_ids)
     st.session_state["mrp_coverage"] = mrp_coverage
 
     result = {}
@@ -480,6 +485,9 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot score responses.")
     st.stop()
 
+# ── State selector — must be called before data load so survey_ids are known ──
+_state_label, _survey_ids = render_state_selector(key_suffix="_il")
+
 # ── Subgroup selection — session_state drives data load, multiselect lives above chart ──
 # Default to Republicans on first load; multiselect widget (in scatter view) updates this
 if "il_subgroups" not in st.session_state:
@@ -488,7 +496,7 @@ _sel = st.session_state.get("il_subgroups") or ["Republicans"]
 _primary_key = DEMO_SUBGROUPS.get(_sel[0], "r")
 
 # Load and aggregate using primary (first selected) subgroup
-question_data = load_question_data(mode=data_mode, subgroup_key=_primary_key)
+question_data = load_question_data(mode=data_mode, subgroup_key=_primary_key, survey_ids=_survey_ids)
 topics = aggregate_to_topics(question_data)
 
 if not topics:
@@ -757,7 +765,7 @@ elif view_mode == "Scatter":
     # ── Multi-group intersection: patch filtered df ──
     if len(sel_keys) > 1 and DEMO_SPLITS_AVAILABLE:
         try:
-            _demo_raw, _scored = load_respondent_level_data()
+            _demo_raw, _scored = load_respondent_level_data(survey_ids=_survey_ids)
             _inter_q = compute_intersection_support(_demo_raw, _scored, sel_keys)
             # Re-compute topic-level skeptic_support from per-QID intersection rates
             filtered = filtered.copy()

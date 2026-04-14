@@ -35,7 +35,8 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary for Overall column)
-from data_loader import load_question_data_hybrid, render_data_source_toggle, get_display_pct
+from data_loader import (load_question_data_hybrid, render_data_source_toggle,
+                         get_display_pct, render_state_selector)
 
 st.set_page_config(page_title="Voter Segments — SLA Portal", page_icon="🎯", layout="wide")
 
@@ -175,17 +176,20 @@ def _map_gender(gender):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading Coalition Heatmap™ data...")
-def load_segment_data(data_mode="mrp"):
+def load_segment_data(data_mode="mrp", survey_ids=None):
     """
     Pull L2 responses and L1 demographics, score each response,
     compute support rates by construct and demographic subgroup.
+    survey_ids: tuple of survey IDs to filter to, or None for all CJ surveys.
 
     Returns:
         dict: {construct: {subgroup: support_pct, count: n_responses}}
     """
+    _surveys = survey_ids if survey_ids is not None else tuple(CJ_SURVEYS)
+
     # Pull L2 responses
     all_l2 = []
-    for sid in CJ_SURVEYS:
+    for sid in _surveys:
         rows = _paginate(
             f"{SUPABASE_URL}/rest/v1/l2_responses"
             f"?select=respondent_id,survey_id,question_id,question_text,response"
@@ -196,7 +200,7 @@ def load_segment_data(data_mode="mrp"):
 
     # Pull L1 demographics
     all_l1 = []
-    for sid in CJ_SURVEYS:
+    for sid in _surveys:
         rows = _paginate(
             f"{SUPABASE_URL}/rest/v1/l1_respondents"
             f"?select=respondent_id,survey_id,party_id,ideology,race_ethnicity,age_bracket,gender,education"
@@ -277,7 +281,7 @@ def load_segment_data(data_mode="mrp"):
     # Load MrP-adjusted rates for Overall column (when in MrP mode)
     mrp_construct_overall = {}
     if data_mode == "mrp":
-        mrp_question_data, _mrp_cov = load_question_data_hybrid()
+        mrp_question_data, _mrp_cov = load_question_data_hybrid(survey_ids=_surveys)
         # Aggregate MrP rates by construct (weighted average)
         _c_agg = defaultdict(lambda: {"sum_pct_n": 0, "sum_n": 0})
         for qid, qd in mrp_question_data.items():
@@ -370,7 +374,10 @@ if not SCORING_AVAILABLE:
     st.error("content_scoring.py not found. Cannot compute support rates.")
     st.stop()
 
-heatmap_data = load_segment_data(data_mode=data_mode)
+# ── State selector ──
+_state_label, _survey_ids = render_state_selector(key_suffix="_vs")
+
+heatmap_data = load_segment_data(data_mode=data_mode, survey_ids=_survey_ids)
 
 if not heatmap_data:
     st.warning("No Coalition Heatmap data available.")

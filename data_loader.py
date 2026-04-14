@@ -93,6 +93,42 @@ def get_display_pct(qd, mode="mrp"):
 
 
 # ══════════════════════════════════════════════════════════════════
+# STATE SELECTOR HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+# Maps display label → tuple of survey_ids (tuples are hashable for @st.cache_data)
+STATE_SURVEY_MAP = {
+    "All States":       tuple(CJ_SURVEYS),
+    "Louisiana":        ("LA-CJ-2025-002", "LA-CJ-2025-001"),
+    "Oklahoma":         ("OK-CJ-2025-001",),
+    "Virginia":         ("VA-CJ-2026-001",),
+    "Massachusetts":    ("MA-CJ-2026-001",),
+    "North Carolina":   ("NC-CJ-2026-001",),
+    "New Jersey":       ("NJ-CJ-2026-001",),
+}
+
+STATE_DISPLAY_ORDER = [
+    "All States",
+    "Louisiana", "Oklahoma", "Virginia",
+    "Massachusetts", "North Carolina", "New Jersey",
+]
+
+
+def render_state_selector(key_suffix=""):
+    """Render a State selectbox in the sidebar.
+    Returns (label, survey_ids_tuple).
+    key_suffix avoids widget-key collisions when called from multiple pages.
+    """
+    label = st.sidebar.selectbox(
+        "State",
+        options=STATE_DISPLAY_ORDER,
+        index=0,
+        key=f"state_selector{key_suffix}",
+    )
+    return label, STATE_SURVEY_MAP[label]
+
+
+# ══════════════════════════════════════════════════════════════════
 # CANONICAL SUPPORT-RATE HELPER
 # ══════════════════════════════════════════════════════════════════
 
