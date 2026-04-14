@@ -1,11 +1,12 @@
 """
-Persuasion Architecture — Construct Tiers & Voter Pathways
-Live data: constructs grouped by persuasion tier, with Q1 support rates and bridge logic.
+MrP Estimates — Persuasion Architecture & Population Weight Lab
+Construct tiers, voter pathways, and partner-adjustable MrP demographic weights.
 """
 
 import streamlit as st
 from pathlib import Path
 import sys
+import json
 import pandas as pd
 import requests
 from collections import defaultdict
@@ -87,8 +88,8 @@ CONSTRUCT_LABELS = {
 }
 
 st.set_page_config(
-    page_title="Persuasion Architecture — SLA Portal",
-    page_icon="🧩",
+    page_title="MrP Estimates — SLA Portal",
+    page_icon="⚖️",
     layout="wide",
 )
 
@@ -97,6 +98,217 @@ username = require_auth("Second Look Alliance", accent_color=GOLD)
 
 SUPABASE_URL, SUPABASE_KEY = get_supabase_config()
 HEADERS = get_supabase_headers()
+
+
+# ══════════════════════════════════════════════════════════════════
+# MRP WEIGHT LAB — Census ACS Baseline + Partner Overrides
+# ══════════════════════════════════════════════════════════════════
+
+ACS_BASELINE = {
+    "Louisiana": {
+        "race":  {"White": 57.0, "Black": 32.0, "Hispanic": 5.0, "Other": 6.0},
+        "age":   {"18–34": 27.0, "35–54": 33.0, "55–64": 18.0, "65+": 22.0},
+        "edu":   {"No college": 43.0, "Some college": 29.0, "College+": 28.0},
+        "gender":{"Male": 48.0, "Female": 52.0},
+    },
+    "Oklahoma": {
+        "race":  {"White": 64.0, "Black": 8.0, "Hispanic": 12.0, "Other": 16.0},
+        "age":   {"18–34": 29.0, "35–54": 33.0, "55–64": 17.0, "65+": 21.0},
+        "edu":   {"No college": 43.0, "Some college": 31.0, "College+": 26.0},
+        "gender":{"Male": 49.0, "Female": 51.0},
+    },
+    "Virginia": {
+        "race":  {"White": 61.0, "Black": 20.0, "Hispanic": 10.0, "Other": 9.0},
+        "age":   {"18–34": 27.0, "35–54": 35.0, "55–64": 18.0, "65+": 20.0},
+        "edu":   {"No college": 33.0, "Some college": 22.0, "College+": 45.0},
+        "gender":{"Male": 49.0, "Female": 51.0},
+    },
+    "Massachusetts": {
+        "race":  {"White": 71.0, "Black": 9.0, "Hispanic": 12.0, "Other": 8.0},
+        "age":   {"18–34": 28.0, "35–54": 33.0, "55–64": 18.0, "65+": 21.0},
+        "edu":   {"No college": 28.0, "Some college": 20.0, "College+": 52.0},
+        "gender":{"Male": 49.0, "Female": 51.0},
+    },
+    "North Carolina": {
+        "race":  {"White": 63.0, "Black": 22.0, "Hispanic": 10.0, "Other": 5.0},
+        "age":   {"18–34": 27.0, "35–54": 34.0, "55–64": 18.0, "65+": 21.0},
+        "edu":   {"No college": 42.0, "Some college": 27.0, "College+": 31.0},
+        "gender":{"Male": 49.0, "Female": 51.0},
+    },
+    "New Jersey": {
+        "race":  {"White": 54.0, "Black": 15.0, "Hispanic": 21.0, "Other": 10.0},
+        "age":   {"18–34": 25.0, "35–54": 35.0, "55–64": 19.0, "65+": 21.0},
+        "edu":   {"No college": 35.0, "Some college": 17.0, "College+": 48.0},
+        "gender":{"Male": 49.0, "Female": 51.0},
+    },
+}
+
+DIM_LABELS = {
+    "race":   "Race / Ethnicity",
+    "age":    "Age Brackets",
+    "edu":    "Education",
+    "gender": "Gender",
+}
+
+DIM_HELP = {
+    "race":   "Census ACS B03002 (Hispanic or Latino Origin by Race), collapsed to 4 buckets.",
+    "age":    "Census ACS B01001 (Sex by Age, 18+), collapsed to survey-aligned brackets.",
+    "edu":    "Census ACS B15003 (Educational Attainment 25+). No college = less than HS + HS diploma.",
+    "gender": "Census ACS B01001 sex totals.",
+}
+
+
+def _weight_lab_section():
+    """Render the MrP Population Weight Lab expander."""
+
+    with st.expander("⚖️ MrP Population Weight Lab — Adjust Demographic Assumptions", expanded=False):
+
+        st.markdown(f"""
+        <div style="font-size:0.88rem;color:{TEXT2};line-height:1.6;margin-bottom:1rem;">
+            MrP weights the model's predictions to match each state's actual population composition,
+            using U.S. Census ACS data. But Census <em>population</em> ≠ actual <em>electorate</em> —
+            turnout varies dramatically by race, age, and education depending on the election type.<br><br>
+            Use this tool to override the ACS baseline with turnout-adjusted assumptions for your
+            specific race. Changes are exported as JSON for the pipeline's next run —
+            they do not update the numbers currently shown in the portal.
+        </div>
+        """, unsafe_allow_html=True)
+
+        state = st.selectbox(
+            "Select state to configure",
+            list(ACS_BASELINE.keys()),
+            key="wl_state",
+        )
+        baseline = ACS_BASELINE[state]
+
+        sk = f"wl_overrides_{state}"
+        if sk not in st.session_state:
+            st.session_state[sk] = {
+                dim: dict(cats) for dim, cats in baseline.items()
+            }
+
+        overrides = st.session_state[sk]
+        all_valid = True
+
+        st.markdown(f"""
+        <div style="font-size:0.78rem;color:{TEXT3};margin-bottom:0.5rem;">
+            ACS Census baseline shown in grey. Adjust values to match your expected turnout.
+            Each dimension must sum to exactly 100%.
+        </div>
+        """, unsafe_allow_html=True)
+
+        for dim, cats in baseline.items():
+            dim_label = DIM_LABELS[dim]
+            dim_help  = DIM_HELP[dim]
+            n_cats = len(cats)
+
+            st.markdown(
+                f'<div style="font-size:0.78rem;font-weight:700;color:{NAVY};'
+                f'text-transform:uppercase;letter-spacing:0.06em;margin:1rem 0 0.4rem 0;">'
+                f'{dim_label} <span style="font-weight:400;color:{TEXT3};'
+                f'text-transform:none;letter-spacing:0;">— {dim_help}</span></div>',
+                unsafe_allow_html=True,
+            )
+
+            cols = st.columns(n_cats)
+            new_vals = {}
+            for i, (cat, acs_val) in enumerate(cats.items()):
+                with cols[i]:
+                    cur = overrides[dim].get(cat, acs_val)
+                    entered = st.number_input(
+                        f"{cat}",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=float(cur),
+                        step=0.5,
+                        format="%.1f",
+                        key=f"wl_{state}_{dim}_{cat}",
+                        help=f"ACS baseline: {acs_val:.1f}%",
+                    )
+                    new_vals[cat] = entered
+                    delta = entered - acs_val
+                    delta_color = GOLD if abs(delta) > 0.05 else TEXT3
+                    st.markdown(
+                        f'<div style="font-size:0.72rem;color:{delta_color};'
+                        f'text-align:center;margin-top:-0.5rem;">'
+                        f'ACS: {acs_val:.1f}%'
+                        f'{" (" + ("+"+f"{delta:.1f}" if delta>0 else f"{delta:.1f}") + "pp)" if abs(delta)>0.05 else ""}'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+            overrides[dim] = new_vals
+
+            dim_sum = sum(new_vals.values())
+            off_by = dim_sum - 100.0
+            if abs(off_by) < 0.05:
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:#1B6B3A;font-weight:600;">✓ {dim_sum:.1f}% — valid</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                direction = "over" if off_by > 0 else "short"
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:#8B1A1A;font-weight:600;">'
+                    f'⚠ {dim_sum:.1f}% — {abs(off_by):.1f}pp {direction} of 100%. '
+                    f'Adjust before exporting.</div>',
+                    unsafe_allow_html=True,
+                )
+                all_valid = False
+
+        st.markdown("---")
+
+        reset_col, export_col = st.columns([1, 3])
+
+        with reset_col:
+            if st.button("↺ Reset to ACS", key=f"wl_reset_{state}"):
+                st.session_state[sk] = {
+                    dim: dict(cats) for dim, cats in baseline.items()
+                }
+                st.rerun()
+
+        with export_col:
+            export_payload = {
+                "state": state,
+                "note": (
+                    "Turnout-adjusted MrP weight overrides. Feed to population_targets.py "
+                    "apply_overrides() before pipeline run. Dimensions must each sum to 1.0."
+                ),
+                "overrides": {
+                    dim: {cat: round(v / 100, 4) for cat, v in cats.items()}
+                    for dim, cats in overrides.items()
+                },
+                "acs_baseline": {
+                    dim: {cat: round(v / 100, 4) for cat, v in cats.items()}
+                    for dim, cats in baseline.items()
+                },
+            }
+            json_str = json.dumps(export_payload, indent=2)
+
+            if all_valid:
+                st.download_button(
+                    label="⬇ Export overrides JSON for pipeline",
+                    data=json_str,
+                    file_name=f"mrp_overrides_{state.lower().replace(' ', '_')}.json",
+                    mime="application/json",
+                    key=f"wl_export_{state}",
+                )
+                st.markdown(
+                    f'<div style="font-size:0.78rem;color:{TEXT3};margin-top:0.3rem;">'
+                    f'Pass to <code>population_targets.py apply_overrides()</code> before '
+                    f'running <code>unified_pipeline.py --stage mrp</code>.</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div style="font-size:0.82rem;color:#8B1A1A;">'
+                    f'Fix dimension totals above before exporting.</div>',
+                    unsafe_allow_html=True,
+                )
+
+        with st.expander("Preview export JSON", expanded=False):
+            st.code(json_str, language="json")
+
 
 # Tier display order and descriptions
 TIER_ORDER = ["Entry", "Entry (VA)", "Bridge", "Downstream", "Destination", "Gauge"]
@@ -276,14 +488,22 @@ def load_construct_data(data_mode="mrp"):
 # MAIN PAGE
 # ══════════════════════════════════════════════════════════════════
 
-st.title("🧩 Persuasion Architecture")
+st.title("⚖️ MrP Estimates")
 
 # MrP/Raw toggle
 data_mode = render_data_source_toggle()
 data_source_badge(data_mode)
 
 st.markdown(
-    "Topics organized by their role in reaching reform skeptics. "
+    "Population-adjusted support rates organized by persuasion tier. "
+    "Use the Weight Lab below to tune demographic assumptions for your specific election."
+)
+
+_weight_lab_section()
+st.divider()
+
+st.subheader("🧩 Persuasion Architecture")
+st.markdown(
     "Entry tiers are the foothold. Bridge is the wedge. Downstream proposals follow once agreement accumulates."
 )
 
