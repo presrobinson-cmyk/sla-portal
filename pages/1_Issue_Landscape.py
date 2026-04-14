@@ -248,63 +248,181 @@ def load_question_data(mode="mrp", subgroup_key="r", survey_ids=None):
 
 
 @st.cache_data(ttl=604800, show_spinner="Loading MPT scatter data...")
-def load_mpt_scatter_data():
+def load_mpt_conservative_data():
     """
-    Compute MrP Reach and Universality per construct for the MPT scatter.
+    Compute per-construct MrP Reach and Conservative Support for the MPT scatter.
 
-    Reach       = population-weighted mean MrP support across all surveyed states (0-100)
-    Universality = 100 - std_dev(per-state MrP rates)
-                 → 100 means perfectly consistent cross-state
-                 → lower means support varies heavily by state
+    Reach               = mean MrP support across all surveyed states (0-100)
+    Conservative Support = % of self-ID Conservative/Very Conservative respondents
+                           who gave a favorable response (scored via score_content).
 
-    Constructs in fewer than 2 states are excluded (universality is undefined).
-    Returns a list of dicts: {construct, topic, tier, reach, universality, n_states, n_items}
+    Min 20 conservative responses required per construct.
+    Returns list of dicts: {construct, topic, tier, reach, conservative_support, n_conservative}
     """
+    if not SCORING_AVAILABLE:
+        return []
+
+    # ── 1. MrP Reach from mrp_question_summary ──────────────────────
     mrp_data, _ = load_mrp_question_summary()
-
-    # Group by (construct, state) via survey_id → SURVEY_STATE mapping
-    from collections import defaultdict
-    construct_state = defaultdict(lambda: defaultdict(list))  # {construct: {state: [mrp_pct, ...]}}
-
+    construct_state = defaultdict(lambda: defaultdict(list))
     for (sid, qid), row in mrp_data.items():
-        if not SCORING_AVAILABLE:
-            continue
         construct = get_construct(qid)
         if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
             continue
         mrp_pct = row.get("mrp_pct")
         if mrp_pct is None:
             continue
-        # Use state column if present and populated, else derive from survey_id
         state = row.get("state") or SURVEY_STATE.get(sid)
         if not state:
             continue
         construct_state[construct][state].append(mrp_pct)
 
-    records = []
+    reach_map = {}
     for construct, states in construct_state.items():
-        if len(states) < 2:
-            continue  # universality requires 2+ states
+        reach_map[construct] = float(np.mean([np.mean(v) for v in states.values()]))
 
-        # Per-state mean (in case multiple questions per construct per state)
-        state_means = {s: np.mean(vals) for s, vals in states.items()}
-        reach = float(np.mean(list(state_means.values())))
-        std_dev = float(np.std(list(state_means.values())))
-        universality = max(0.0, 100.0 - std_dev)
+    # ── 2. Conservative respondent IDs (all CJ surveys) ──────────────
+    url, _ = get_supabase_config()
+    headers = get_supabase_headers()
 
-        tier = TIER_MAP.get(construct, "")
-        label = CONSTRUCT_LABELS.get(construct, construct)
-        n_items = sum(len(v) for v in states.values())
+    conservative_rows = _paginate(
+        f"{url}/rest/v1/l1_respondents"
+        f"?select=respondent_id,survey_id"
+        f"&survey_domain=eq.CJ"
+        f"&ideology=ilike.*conservative*",
+        headers,
+    )
+    conservative_ids = {r["respondent_id"] for r in conservative_rows}
 
+    if not conservative_ids:
+        return []
+
+    # ── 3. Score responses from conservative respondents ─────────────
+    construct_counts = defaultdict(lambda: {"n_fav": 0, "n_total": 0})
+    surveys_param = ",".join(CJ_SURVEYS)
+
+    response_rows = _paginate(
+        f"{url}/rest/v1/l2_responses"
+        f"?select=respondent_id,question_id,response,survey_id"
+        f"&domain=eq.CJ",
+        headers,
+    )
+
+    for row in response_rows:
+        rid = row.get("respondent_id")
+        if rid not in conservative_ids:
+            continue
+        qid = row.get("question_id", "")
+        response_text = row.get("response", "")
+        sid = row.get("survey_id", "")
+        construct = get_construct(qid)
+        if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
+            continue
+        if construct not in reach_map:
+            continue
+        favorable, _, _ = score_content(qid, response_text, sid)
+        if favorable is None:
+            continue
+        construct_counts[construct]["n_total"] += 1
+        construct_counts[construct]["n_fav"] += favorable
+
+    # ── 4. Assemble records ──────────────────────────────────────────
+    records = []
+    for construct, counts in construct_counts.items():
+        if counts["n_total"] < 20:
+            continue
+        conservative_support = round(counts["n_fav"] / counts["n_total"] * 100, 1)
+        reach = reach_map.get(construct)
+        if reach is None:
+            continue
         records.append({
             "construct": construct,
-            "topic": label,
-            "tier": tier,
-            "reach": reach,
-            "universality": universality,
-            "n_states": len(states),
-            "n_items": n_items,
-            "state_breakdown": {s: round(v, 1) for s, v in sorted(state_means.items())},
+            "topic": CONSTRUCT_LABELS.get(construct, construct),
+            "tier": TIER_MAP.get(construct, ""),
+            "reach": round(reach, 1),
+            "conservative_support": conservative_support,
+            "n_conservative": counts["n_total"],
+        })
+
+    return records
+
+
+@st.cache_data(ttl=604800, show_spinner="Loading durability data...")
+def load_durability_scatter_data():
+    """
+    Compute per-construct MrP Reach and Message Durability for the Durability scatter.
+
+    Reach         = mean MrP support across surveyed states (0-100)
+    Durability %  = % of scored l2 responses classified as Golden Zone or Primary Fuel.
+                    Only non-null durability_quadrant rows count in the denominator.
+
+    Min 10 scored responses required per construct.
+    Returns list of dicts: {construct, topic, tier, reach, durability_pct, n_items}
+    """
+    if not SCORING_AVAILABLE:
+        return []
+
+    # ── 1. MrP Reach (same logic as above) ──────────────────────────
+    mrp_data, _ = load_mrp_question_summary()
+    construct_state = defaultdict(lambda: defaultdict(list))
+    for (sid, qid), row in mrp_data.items():
+        construct = get_construct(qid)
+        if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
+            continue
+        mrp_pct = row.get("mrp_pct")
+        if mrp_pct is None:
+            continue
+        state = row.get("state") or SURVEY_STATE.get(sid)
+        if not state:
+            continue
+        construct_state[construct][state].append(mrp_pct)
+
+    reach_map = {}
+    for construct, states in construct_state.items():
+        reach_map[construct] = float(np.mean([np.mean(v) for v in states.values()]))
+
+    # ── 2. Durability from l2_responses ─────────────────────────────
+    url, _ = get_supabase_config()
+    headers = get_supabase_headers()
+
+    dur_rows = _paginate(
+        f"{url}/rest/v1/l2_responses"
+        f"?select=question_id,durability_quadrant"
+        f"&domain=eq.CJ"
+        f"&durability_quadrant=not.is.null",
+        headers,
+    )
+
+    DURABLE = {"Golden Zone", "Primary Fuel"}
+    construct_dur = defaultdict(lambda: {"n_durable": 0, "n_total": 0})
+    for row in dur_rows:
+        qid = row.get("question_id", "")
+        quad = row.get("durability_quadrant")
+        construct = get_construct(qid)
+        if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
+            continue
+        if construct not in reach_map:
+            continue
+        construct_dur[construct]["n_total"] += 1
+        if quad in DURABLE:
+            construct_dur[construct]["n_durable"] += 1
+
+    # ── 3. Assemble records ──────────────────────────────────────────
+    records = []
+    for construct, counts in construct_dur.items():
+        if counts["n_total"] < 10:
+            continue
+        durability_pct = round(counts["n_durable"] / counts["n_total"] * 100, 1)
+        reach = reach_map.get(construct)
+        if reach is None:
+            continue
+        records.append({
+            "construct": construct,
+            "topic": CONSTRUCT_LABELS.get(construct, construct),
+            "tier": TIER_MAP.get(construct, ""),
+            "reach": round(reach, 1),
+            "durability_pct": durability_pct,
+            "n_items": counts["n_total"],
         })
 
     return records
@@ -525,7 +643,7 @@ with st.sidebar:
     # Empty selection = show all quadrants (cleaner than pre-selecting all tags)
     active_quads = quad_filter if quad_filter else list(QUAD_COLORS.keys())
 
-    view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List", "MPT View"], key="il_view")
+    view_mode = st.radio("View Type", ["Scatter", "Consensus Gauge", "Ranked List", "MPT View", "Durability View"], key="il_view")
 
     st.divider()
     st.metric("Topics", f"{len(df_plot)}")
@@ -1025,21 +1143,22 @@ elif view_mode == "Ranked List":
 
 
 # ══════════════════════════════════════════════════════════════════
-# MPT VIEW — MrP Reach × Universality scatter
+# MPT VIEW — MrP Reach × Conservative Support scatter
 # ══════════════════════════════════════════════════════════════════
 
 elif view_mode == "MPT View":
-    st.markdown("## MPT Scatter — Reach × Universality")
+    st.markdown("## MPT Scatter — Reach × Conservative Support")
     st.caption(
-        "**Reach** = MrP-adjusted overall support across all surveyed states. "
-        "**Universality** = cross-state consistency (100 − std dev of state-level rates). "
-        "Topics in the upper-right hold up everywhere and have broad support — the safest message investment."
+        "**Reach** = MrP-adjusted overall support across all surveyed states (0–100%). "
+        "**Conservative Support** = % of self-identified Conservative / Very Conservative respondents "
+        "who gave a favorable response. "
+        "Topics in the upper-right work across the political spectrum — the strongest message investment."
     )
 
-    mpt_records = load_mpt_scatter_data()
+    mpt_records = load_mpt_conservative_data()
 
     if not mpt_records:
-        st.warning("MPT scatter requires MrP data from at least 2 states. Run the MrP pipeline for additional state surveys first.")
+        st.warning("Conservative support data unavailable. Check that l1_respondents and l2_responses are populated for CJ surveys.")
         st.stop()
 
     mpt_df = pd.DataFrame(mpt_records)
@@ -1056,85 +1175,83 @@ elif view_mode == "MPT View":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Topics Plotted", f"{len(mpt_df)}")
     c2.metric("Avg Reach", f"{mpt_df['reach'].mean():.0f}%")
-    c3.metric("Avg Universality", f"{mpt_df['universality'].mean():.0f}")
-    c4.metric("States Covered", f"{mpt_df['n_states'].max()}")
+    c3.metric("Avg Conservative Support", f"{mpt_df['conservative_support'].mean():.0f}%")
+    c4.metric("Total Conservative Responses", f"{mpt_df['n_conservative'].sum():,}")
 
     # ── Quadrant thresholds ──
+    # reach: 60% = majority population support (fixed, principled)
+    # conservative: 50% = majority of conservatives support it (fixed, meaningful)
     reach_thresh = 60.0
-    univ_thresh = mpt_df["universality"].median()  # data-driven midpoint
+    con_thresh   = 50.0
 
     MPT_QUAD_COLORS = {
-        "Universal Consensus": "#1B6B3A",    # High Reach + High Universality
-        "Fragmented Consensus": "#1155AA",   # High Reach + Low Universality
-        "Consistent Niche": "#B85400",       # Low Reach + High Universality
-        "Volatile / Niche": "#8B1A1A",       # Low Reach + Low Universality
+        "Cross-Cutting":        "#1B6B3A",   # High Reach + High Con — use freely
+        "Base Enthusiasm":      "#1155AA",   # High Reach + Low Con — preaching to choir
+        "Conservative Niche":   "#B85400",   # Low Reach + High Con — wedge opportunity
+        "Low Priority":         "#8B1A1A",   # Low Reach + Low Con — avoid
     }
 
     def mpt_quadrant(row):
         hi_reach = row["reach"] >= reach_thresh
-        hi_univ  = row["universality"] >= univ_thresh
-        if hi_reach and hi_univ:
-            return "Universal Consensus"
-        elif hi_reach and not hi_univ:
-            return "Fragmented Consensus"
-        elif not hi_reach and hi_univ:
-            return "Consistent Niche"
+        hi_con   = row["conservative_support"] >= con_thresh
+        if hi_reach and hi_con:
+            return "Cross-Cutting"
+        elif hi_reach and not hi_con:
+            return "Base Enthusiasm"
+        elif not hi_reach and hi_con:
+            return "Conservative Niche"
         else:
-            return "Volatile / Niche"
+            return "Low Priority"
 
     mpt_df = mpt_df.copy()
     mpt_df["quadrant"] = mpt_df.apply(mpt_quadrant, axis=1)
 
-    # ── Regression line ──
+    # ── Regression ──
     x_vals = mpt_df["reach"].values
-    y_vals = mpt_df["universality"].values
+    y_vals = mpt_df["conservative_support"].values
     try:
-        coef = np.polyfit(x_vals, y_vals, 1)
-        x_reg = np.linspace(x_vals.min() - 2, x_vals.max() + 2, 100)
-        y_reg = np.polyval(coef, x_reg)
-        r_sq = np.corrcoef(x_vals, y_vals)[0, 1] ** 2
+        coef    = np.polyfit(x_vals, y_vals, 1)
+        x_reg   = np.linspace(x_vals.min() - 2, x_vals.max() + 2, 100)
+        y_reg   = np.polyval(coef, x_reg)
+        r_sq    = np.corrcoef(x_vals, y_vals)[0, 1] ** 2
         show_regression = True
     except Exception:
         show_regression = False
         r_sq = None
 
-    # ── Build hover text (include per-state breakdown) ──
+    # ── Hover text ──
     hover_texts = []
     for _, row in mpt_df.iterrows():
-        breakdown = "<br>".join(
-            f"  {s}: {v}%" for s, v in row["state_breakdown"].items()
-        )
         hover_texts.append(
             f"<b>{row['topic']}</b><br>"
             f"Reach: {row['reach']:.1f}%<br>"
-            f"Universality: {row['universality']:.1f}<br>"
+            f"Conservative Support: {row['conservative_support']:.1f}%<br>"
             f"Tier: {row['tier'] or '—'}<br>"
-            f"States ({row['n_states']}):<br>{breakdown}"
+            f"Conservative responses: {row['n_conservative']:,}"
             f"<extra></extra>"
         )
 
     fig_mpt = px.scatter(
         mpt_df,
-        x="reach", y="universality",
+        x="reach", y="conservative_support",
         color="quadrant",
         color_discrete_map=MPT_QUAD_COLORS,
-        size="n_states",
-        size_max=20,
+        size="n_conservative",
+        size_max=22,
         opacity=0.88,
         text="topic",
         labels={
             "reach": "MrP Reach %",
-            "universality": "MrP Universality",
+            "conservative_support": "Conservative Support %",
             "quadrant": "Quadrant",
         },
-        custom_data=["topic", "tier", "n_states"],
+        custom_data=["topic", "tier", "n_conservative"],
     )
     fig_mpt.update_traces(
         textposition="top center",
         textfont=dict(size=9, family="DM Sans", color="#1E3A5F"),
     )
 
-    # Override hover to use our custom text
     for i, trace in enumerate(fig_mpt.data):
         quad_name = trace.name
         mask = mpt_df["quadrant"] == quad_name
@@ -1153,25 +1270,23 @@ elif view_mode == "MPT View":
             hoverinfo="skip",
         ))
 
-    # Quadrant dividers
-    x_min = max(0, x_vals.min() - 5)
+    # Quadrant dividers + axis bounds
+    x_min = max(0,   x_vals.min() - 5)
     x_max = min(100, x_vals.max() + 5)
-    y_min_plot = max(0, y_vals.min() - 3)
-    y_max_plot = min(100, y_vals.max() + 3)
+    y_min_plot = max(0,   y_vals.min() - 5)
+    y_max_plot = min(100, y_vals.max() + 5)
 
-    fig_mpt.add_hline(y=univ_thresh, line_dash="dash", line_color="#D4D0C8", line_width=1)
-    if reach_thresh >= x_min and reach_thresh <= x_max:
-        fig_mpt.add_vline(x=reach_thresh, line_dash="dash", line_color="#D4D0C8", line_width=1)
+    fig_mpt.add_hline(y=con_thresh,   line_dash="dash", line_color="#D4D0C8", line_width=1)
+    fig_mpt.add_vline(x=reach_thresh, line_dash="dash", line_color="#D4D0C8", line_width=1)
 
-    # Quadrant annotations
-    lx = max(x_min + 1, (x_min + reach_thresh) / 2)
-    rx = min(x_max - 1, (reach_thresh + x_max) / 2)
-    ty = min(y_max_plot - 0.5, y_max_plot - 1)
-    by = max(y_min_plot + 0.5, y_min_plot + 1)
-    fig_mpt.add_annotation(x=lx, y=ty, text="Consistent Niche",      showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
-    fig_mpt.add_annotation(x=rx, y=ty, text="Universal Consensus",   showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
-    fig_mpt.add_annotation(x=lx, y=by, text="Volatile / Niche",      showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
-    fig_mpt.add_annotation(x=rx, y=by, text="Fragmented Consensus",  showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
+    lx = (x_min + reach_thresh) / 2
+    rx = (reach_thresh + x_max) / 2
+    ty = y_max_plot - 1.5
+    by = y_min_plot + 1.5
+    fig_mpt.add_annotation(x=lx, y=ty, text="Conservative Niche", showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
+    fig_mpt.add_annotation(x=rx, y=ty, text="Cross-Cutting",       showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
+    fig_mpt.add_annotation(x=lx, y=by, text="Low Priority",        showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
+    fig_mpt.add_annotation(x=rx, y=by, text="Base Enthusiasm",     showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
 
     fig_mpt.update_layout(
         template="plotly_white",
@@ -1185,66 +1300,240 @@ elif view_mode == "MPT View":
             title_font=dict(color=NAVY, size=12),
         ),
         yaxis=dict(
-            range=[y_min_plot, y_max_plot], gridcolor="#E8E4DC",
-            title="MrP Universality (100 − cross-state std dev)",
+            range=[y_min_plot, y_max_plot], dtick=10, gridcolor="#E8E4DC",
+            title="Conservative Support % (self-ID Conservative / Very Conservative)",
             title_font=dict(color=NAVY, size=12),
         ),
-        legend=dict(
-            font=dict(size=10, color=NAVY),
-            bgcolor="rgba(250,249,246,0.9)",
-            bordercolor=BORDER2, borderwidth=1,
-        ),
+        legend=dict(font=dict(size=10, color=NAVY), bgcolor="rgba(250,249,246,0.9)", bordercolor=BORDER2, borderwidth=1),
         font=dict(family="DM Sans", color=NAVY),
         title=dict(
-            text=f"MrP Reach × Universality · {len(mpt_df)} topics across {mpt_df['n_states'].max()} states",
-            font=dict(size=13, color=NAVY),
-            x=0.01,
+            text=f"MrP Reach × Conservative Support · {len(mpt_df)} topics",
+            font=dict(size=13, color=NAVY), x=0.01,
         ),
     )
 
     st.plotly_chart(fig_mpt, use_container_width=True, key="il_mpt_scatter")
 
-    # ── Interpretation box ──
+    # ── Interpretation note ──
     if show_regression and r_sq is not None:
         slope_dir = "positively" if coef[0] > 0 else "negatively"
         st.markdown(f"""
         <div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {GOLD};
             border-radius:8px;padding:1rem 1.25rem;margin-top:0.5rem;font-size:0.85rem;color:{TEXT2};">
-            <strong style="color:{NAVY};">Regression read:</strong>
-            Reach and Universality are <strong>{slope_dir} correlated</strong>
-            (R²={r_sq:.2f}). The universality threshold (dashed horizontal) is set at the median
-            ({univ_thresh:.1f}) across plotted topics.
-            Universality = 100 − std dev, so 90+ means &lt;10pp spread across states.
+            <strong style="color:{NAVY};">Read:</strong>
+            Reach and Conservative Support are <strong>{slope_dir} correlated</strong>
+            (R²={r_sq:.2f}).
+            Vertical line = 60% reach. Horizontal line = 50% conservative support (majority threshold).
+            Bubble size = number of conservative responses scored.
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Per-topic state breakdown table ──
+    # ── Per-topic detail table ──
     st.divider()
-    st.markdown("#### State-Level Detail")
-    st.caption("Select a topic to see its per-state MrP support rates.")
-
+    st.markdown("#### Topic Detail")
     topic_opts_mpt = sorted(mpt_df["topic"].tolist())
     sel_mpt = st.selectbox("Topic", ["(select a topic)"] + topic_opts_mpt, key="il_mpt_topic")
     if sel_mpt != "(select a topic)":
         sel_row = mpt_df[mpt_df["topic"] == sel_mpt].iloc[0]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Reach", f"{sel_row['reach']:.1f}%")
-        c2.metric("Universality", f"{sel_row['universality']:.1f}")
-        c3.metric("Tier", sel_row["tier"] or "—")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Reach",                 f"{sel_row['reach']:.1f}%")
+        c2.metric("Conservative Support",  f"{sel_row['conservative_support']:.1f}%")
+        c3.metric("Persuasion Tier",       sel_row["tier"] or "—")
+        c4.metric("Con. Responses Scored", f"{sel_row['n_conservative']:,}")
 
-        # Per-state bars
-        for state_name, pct in sel_row["state_breakdown"].items():
-            color = STATE_COLORS.get(state_name, NAVY)
-            st.markdown(
-                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">'
-                f'<div style="width:120px;font-size:0.82rem;color:{TEXT2};text-align:right;">{state_name}</div>'
-                f'<div style="flex:1;height:18px;background:{BORDER2};border-radius:4px;overflow:hidden;">'
-                f'<div style="width:{min(pct,100):.0f}%;height:100%;background:{color};border-radius:4px;"></div>'
-                f'</div>'
-                f'<div style="width:44px;font-size:0.85rem;font-weight:600;color:{color};">{pct:.0f}%</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+
+# ══════════════════════════════════════════════════════════════════
+# DURABILITY VIEW — MrP Reach × Message Durability
+# ══════════════════════════════════════════════════════════════════
+
+elif view_mode == "Durability View":
+    st.markdown("## Durability Scatter — Reach × Message Durability")
+    st.caption(
+        "**Reach** = MrP-adjusted overall support across all surveyed states. "
+        "**Durability %** = share of scored responses classified as Golden Zone or Primary Fuel. "
+        "Topics in the upper-right are broadly popular AND hold up under pressure — the most resilient message investments."
+    )
+
+    dur_records = load_durability_scatter_data()
+
+    if not dur_records:
+        st.warning("Durability data unavailable. Ensure durability_quadrant is populated in l2_responses for CJ surveys.")
+        st.stop()
+
+    dur_df = pd.DataFrame(dur_records)
+
+    if tier_filter != "All Tiers":
+        dur_df = dur_df[dur_df["tier"] == tier_filter]
+
+    if dur_df.empty:
+        st.warning("No topics match the current tier filter.")
+        st.stop()
+
+    # ── KPI row ──
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Topics Plotted",   f"{len(dur_df)}")
+    c2.metric("Avg Reach",        f"{dur_df['reach'].mean():.0f}%")
+    c3.metric("Avg Durability",   f"{dur_df['durability_pct'].mean():.0f}%")
+    c4.metric("Total Responses",  f"{dur_df['n_items'].sum():,}")
+
+    # ── Thresholds (both data-driven medians) ──
+    reach_thresh_d = 60.0
+    dur_thresh     = float(dur_df["durability_pct"].median())
+
+    DUR_QUAD_COLORS = {
+        "Resilient Consensus": "#1B6B3A",   # High Reach + High Durability
+        "Fragile Popularity":  "#1155AA",   # High Reach + Low Durability
+        "Durable Niche":       "#B85400",   # Low Reach + High Durability
+        "Low Priority":        "#8B1A1A",   # Low Reach + Low Durability
+    }
+
+    def dur_quadrant(row):
+        hi_reach = row["reach"] >= reach_thresh_d
+        hi_dur   = row["durability_pct"] >= dur_thresh
+        if hi_reach and hi_dur:
+            return "Resilient Consensus"
+        elif hi_reach and not hi_dur:
+            return "Fragile Popularity"
+        elif not hi_reach and hi_dur:
+            return "Durable Niche"
+        else:
+            return "Low Priority"
+
+    dur_df = dur_df.copy()
+    dur_df["quadrant"] = dur_df.apply(dur_quadrant, axis=1)
+
+    # ── Regression ──
+    x_vals_d = dur_df["reach"].values
+    y_vals_d = dur_df["durability_pct"].values
+    try:
+        coef_d    = np.polyfit(x_vals_d, y_vals_d, 1)
+        x_reg_d   = np.linspace(x_vals_d.min() - 2, x_vals_d.max() + 2, 100)
+        y_reg_d   = np.polyval(coef_d, x_reg_d)
+        r_sq_d    = np.corrcoef(x_vals_d, y_vals_d)[0, 1] ** 2
+        show_reg_d = True
+    except Exception:
+        show_reg_d = False
+        r_sq_d = None
+
+    # ── Hover text ──
+    hover_texts_d = []
+    for _, row in dur_df.iterrows():
+        hover_texts_d.append(
+            f"<b>{row['topic']}</b><br>"
+            f"Reach: {row['reach']:.1f}%<br>"
+            f"Durability: {row['durability_pct']:.1f}%<br>"
+            f"Tier: {row['tier'] or '—'}<br>"
+            f"Scored responses: {row['n_items']:,}"
+            f"<extra></extra>"
+        )
+
+    fig_dur = px.scatter(
+        dur_df,
+        x="reach", y="durability_pct",
+        color="quadrant",
+        color_discrete_map=DUR_QUAD_COLORS,
+        size="n_items",
+        size_max=22,
+        opacity=0.88,
+        text="topic",
+        labels={
+            "reach":         "MrP Reach %",
+            "durability_pct": "Durability %",
+            "quadrant":       "Quadrant",
+        },
+        custom_data=["topic", "tier", "n_items"],
+    )
+    fig_dur.update_traces(
+        textposition="top center",
+        textfont=dict(size=9, family="DM Sans", color="#1E3A5F"),
+    )
+
+    for i, trace in enumerate(fig_dur.data):
+        quad_name = trace.name
+        mask = dur_df["quadrant"] == quad_name
+        trace.hovertemplate = [
+            hover_texts_d[j] for j in dur_df.index[mask].tolist()
+        ]
+
+    if show_reg_d:
+        fig_dur.add_trace(go.Scatter(
+            x=x_reg_d, y=y_reg_d,
+            mode="lines",
+            line=dict(color="#9CA3AF", width=1.5, dash="dot"),
+            showlegend=True,
+            name=f"Regression (R²={r_sq_d:.2f})",
+            hoverinfo="skip",
+        ))
+
+    xd_min = max(0,   x_vals_d.min() - 5)
+    xd_max = min(100, x_vals_d.max() + 5)
+    yd_min = max(0,   y_vals_d.min() - 5)
+    yd_max = min(100, y_vals_d.max() + 5)
+
+    fig_dur.add_hline(y=dur_thresh,      line_dash="dash", line_color="#D4D0C8", line_width=1)
+    fig_dur.add_vline(x=reach_thresh_d,  line_dash="dash", line_color="#D4D0C8", line_width=1)
+
+    lxd = (xd_min + reach_thresh_d) / 2
+    rxd = (reach_thresh_d + xd_max) / 2
+    tyd = yd_max - 2
+    byd = yd_min + 2
+    fig_dur.add_annotation(x=lxd, y=tyd, text="Durable Niche",        showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
+    fig_dur.add_annotation(x=rxd, y=tyd, text="Resilient Consensus",  showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
+    fig_dur.add_annotation(x=lxd, y=byd, text="Low Priority",         showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
+    fig_dur.add_annotation(x=rxd, y=byd, text="Fragile Popularity",   showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
+
+    fig_dur.update_layout(
+        template="plotly_white",
+        paper_bgcolor=BG,
+        plot_bgcolor=CARD_BG,
+        height=640,
+        margin=dict(l=60, r=20, t=50, b=60),
+        xaxis=dict(
+            range=[xd_min, xd_max], dtick=10, gridcolor="#E8E4DC",
+            title="MrP Reach % (overall population support)",
+            title_font=dict(color=NAVY, size=12),
+        ),
+        yaxis=dict(
+            range=[yd_min, yd_max], dtick=10, gridcolor="#E8E4DC",
+            title="Durability % (Golden Zone + Primary Fuel)",
+            title_font=dict(color=NAVY, size=12),
+        ),
+        legend=dict(font=dict(size=10, color=NAVY), bgcolor="rgba(250,249,246,0.9)", bordercolor=BORDER2, borderwidth=1),
+        font=dict(family="DM Sans", color=NAVY),
+        title=dict(
+            text=f"Reach × Message Durability · {len(dur_df)} topics",
+            font=dict(size=13, color=NAVY), x=0.01,
+        ),
+    )
+
+    st.plotly_chart(fig_dur, use_container_width=True, key="il_dur_scatter")
+
+    # ── Interpretation note ──
+    if show_reg_d and r_sq_d is not None:
+        slope_dir_d = "positively" if coef_d[0] > 0 else "negatively"
+        st.markdown(f"""
+        <div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {GOLD};
+            border-radius:8px;padding:1rem 1.25rem;margin-top:0.5rem;font-size:0.85rem;color:{TEXT2};">
+            <strong style="color:{NAVY};">Read:</strong>
+            Reach and Durability are <strong>{slope_dir_d} correlated</strong>
+            (R²={r_sq_d:.2f}).
+            Vertical line = 60% reach. Horizontal line = median durability ({dur_thresh:.0f}%) across plotted topics.
+            Bubble size = number of scored responses. Durability = % Golden Zone + Primary Fuel.
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Per-topic detail ──
+    st.divider()
+    st.markdown("#### Topic Detail")
+    topic_opts_dur = sorted(dur_df["topic"].tolist())
+    sel_dur = st.selectbox("Topic", ["(select a topic)"] + topic_opts_dur, key="il_dur_topic")
+    if sel_dur != "(select a topic)":
+        sel_dur_row = dur_df[dur_df["topic"] == sel_dur].iloc[0]
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Reach",            f"{sel_dur_row['reach']:.1f}%")
+        c2.metric("Durability",       f"{sel_dur_row['durability_pct']:.1f}%")
+        c3.metric("Persuasion Tier",  sel_dur_row["tier"] or "—")
+        c4.metric("Responses Scored", f"{sel_dur_row['n_items']:,}")
 
 
 portal_footer()

@@ -893,3 +893,40 @@ def load_state_question_data(survey_ids, state_name=None):
                 }
 
     return question_data, bool(mrp_covered), bool(needs_raw)
+
+
+# ══════════════════════════════════════════════════════════════════
+# CROSS-STATE CONSTRUCT SUMMARY (for State Report comparisons)
+# ══════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=604800, show_spinner="Loading cross-state data...")
+def load_cross_state_construct_summary():
+    """
+    Returns per-construct, per-state average MrP support rates.
+    {construct: {state_name: avg_mrp_pct}}
+    Useful for cross-state comparison tables in the toplines report.
+    """
+    from theme import SURVEY_STATE
+    from collections import defaultdict
+
+    if not SCORING_AVAILABLE:
+        return {}
+
+    mrp_data, _ = load_mrp_question_summary()
+
+    c_state = defaultdict(lambda: defaultdict(list))
+    for (sid, qid), row in mrp_data.items():
+        state = SURVEY_STATE.get(sid)
+        if not state:
+            continue
+        construct = get_construct(qid)
+        if not construct or qid in SKIPPED_QIDS:
+            continue
+        pct = row.get("mrp_pct")
+        if pct is not None:
+            c_state[construct][state].append(pct)
+
+    return {
+        construct: {state: sum(vals)/len(vals) for state, vals in states.items()}
+        for construct, states in c_state.items()
+    }

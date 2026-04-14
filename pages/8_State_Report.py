@@ -28,7 +28,18 @@ except ImportError:
     SCORING_AVAILABLE = False
 
 # Shared data loader (MrP primary, raw fallback)
-from data_loader import load_state_question_data, _paginate as paginate_supabase, render_data_source_toggle, get_display_pct
+from data_loader import (
+    load_state_question_data, _paginate as paginate_supabase,
+    render_data_source_toggle, get_display_pct,
+    load_party_splits, load_demo_splits, load_cross_state_construct_summary,
+)
+
+# Report generator
+try:
+    from report_generator import generate_state_report, DOCX_MIME
+    REPORT_AVAILABLE = True
+except ImportError:
+    REPORT_AVAILABLE = False
 
 # Human-readable topic names
 CONSTRUCT_LABELS = {
@@ -192,6 +203,50 @@ with st.spinner("Loading state data..."):
     respondent_counts, questions, topics = load_state_data(tuple(state_surveys), data_mode=data_mode)
 
 total_respondents = sum(respondent_counts.values())
+
+# ── Download Report button (top of page, before main content) ──
+if REPORT_AVAILABLE and questions:
+    with st.spinner(""):
+        pass  # Placeholder so the button renders immediately
+
+    col_dl, col_spacer = st.columns([1, 3])
+    with col_dl:
+        if st.button("⬇ Download Toplines Report", use_container_width=True, type="primary"):
+            with st.spinner("Generating report…"):
+                try:
+                    party_splits = load_party_splits(survey_ids=tuple(state_surveys))
+                    demo_splits = load_demo_splits(survey_ids=tuple(state_surveys))
+                    cross_state_data = load_cross_state_construct_summary()
+                    doc_bytes = generate_state_report(
+                        state_name=state_name,
+                        survey_ids=state_surveys,
+                        questions=questions,
+                        topics=topics,
+                        respondent_counts=respondent_counts,
+                        party_splits=party_splits,
+                        demo_splits=demo_splits,
+                        cross_state_data=cross_state_data,
+                        data_mode=data_mode,
+                    )
+                    st.session_state["_report_bytes"] = doc_bytes
+                    st.session_state["_report_filename"] = (
+                        f"{state_name.replace(' ', '_')}_CJ_Toplines_{data_mode.upper()}.docx"
+                    )
+                except Exception as e:
+                    st.error(f"Report generation failed: {e}")
+
+    # Render download button once bytes are ready (survives rerun)
+    if st.session_state.get("_report_bytes"):
+        fname = st.session_state.get("_report_filename", "toplines_report.docx")
+        st.download_button(
+            label="📄 Save Report (.docx)",
+            data=st.session_state["_report_bytes"],
+            file_name=fname,
+            mime=DOCX_MIME,
+            key="dl_report_btn",
+        )
+
+st.divider()
 
 # ─────────────────────────────────────────────────────────────────
 # HEADER
