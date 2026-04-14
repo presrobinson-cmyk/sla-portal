@@ -1474,4 +1474,5 @@ st.divider()
 # CHAT WIDGET & FOOTER
 # ─────────────────────────────────────────────────────────────────
 
+render_chat("mediamaker")
 portal_footer()

@@ -335,4 +335,5 @@ with st.expander("Technical details (for the data-curious)"):
     """, unsafe_allow_html=True)
 
 
+render_chat("home")
 portal_footer()

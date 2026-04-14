@@ -125,4 +125,5 @@ st.info(
     icon="ℹ️"
 )
 
+render_chat("ai_analysis")
 portal_footer()

@@ -434,4 +434,5 @@ st.markdown("")
 if st.button("← Back to Home", use_container_width=False):
     st.switch_page("app.py")
 
+render_chat("state_report")
 portal_footer()

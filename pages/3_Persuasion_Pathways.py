@@ -731,4 +731,5 @@ for i, (col, tier) in enumerate(zip(flow_cols, flow_tiers)):
         """, unsafe_allow_html=True)
 
 
+render_chat("persuasion_pathways")
 portal_footer()

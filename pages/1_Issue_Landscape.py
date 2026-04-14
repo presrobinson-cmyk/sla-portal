@@ -350,19 +350,22 @@ def load_mpt_conservative_data():
 @st.cache_data(ttl=604800, show_spinner="Loading durability data...")
 def load_durability_scatter_data():
     """
-    Compute per-construct MrP Reach and Message Durability for the Durability scatter.
+    Compute per-construct MrP Reach and Cross-Partisan Score for the Durability scatter.
 
-    Reach         = mean MrP support across surveyed states (0-100)
-    Durability %  = % of scored l2 responses classified as Golden Zone or Primary Fuel.
-                    Only non-null durability_quadrant rows count in the denominator.
+    Reach              = mean MrP support across surveyed states (0-100)
+    Cross-Partisan %   = mean cb_score across all scored l2 responses for the construct.
+                         cb_score = 0.35*independent_support + 0.30*republican_support
+                                  + 0.35*persuadable_reach (Moderates / slight partisans / No Party)
+                         This measures whether a message holds with skeptical / persuadable audiences —
+                         genuinely independent of overall Reach (r≈0.65 empirically).
 
     Min 10 scored responses required per construct.
-    Returns list of dicts: {construct, topic, tier, reach, durability_pct, n_items}
+    Returns list of dicts: {construct, topic, tier, reach, cb_score, n_items}
     """
     if not SCORING_AVAILABLE:
         return []
 
-    # ── 1. MrP Reach (same logic as above) ──────────────────────────
+    # ── 1. MrP Reach (same logic as conservative view) ──────────────
     mrp_data, _ = load_mrp_question_summary()
     construct_state = defaultdict(lambda: defaultdict(list))
     for (sid, qid), row in mrp_data.items():
@@ -381,38 +384,38 @@ def load_durability_scatter_data():
     for construct, states in construct_state.items():
         reach_map[construct] = float(np.mean([np.mean(v) for v in states.values()]))
 
-    # ── 2. Durability from l2_responses ─────────────────────────────
+    # ── 2. cb_score from l2_responses ───────────────────────────────
     url, _ = get_supabase_config()
     headers = get_supabase_headers()
 
-    dur_rows = _paginate(
+    cb_rows = _paginate(
         f"{url}/rest/v1/l2_responses"
-        f"?select=question_id,durability_quadrant"
+        f"?select=question_id,cb_score"
         f"&domain=eq.CJ"
-        f"&durability_quadrant=not.is.null",
+        f"&cb_score=not.is.null",
         headers,
     )
 
-    DURABLE = {"Golden Zone", "Primary Fuel"}
-    construct_dur = defaultdict(lambda: {"n_durable": 0, "n_total": 0})
-    for row in dur_rows:
+    construct_cb = defaultdict(lambda: {"cb_sum": 0.0, "n_total": 0})
+    for row in cb_rows:
         qid = row.get("question_id", "")
-        quad = row.get("durability_quadrant")
+        cb = row.get("cb_score")
         construct = get_construct(qid)
         if not construct or construct in GAUGE_CONSTRUCTS or qid in SKIPPED_QIDS:
             continue
         if construct not in reach_map:
             continue
-        construct_dur[construct]["n_total"] += 1
-        if quad in DURABLE:
-            construct_dur[construct]["n_durable"] += 1
+        if cb is None:
+            continue
+        construct_cb[construct]["cb_sum"] += float(cb)
+        construct_cb[construct]["n_total"] += 1
 
     # ── 3. Assemble records ──────────────────────────────────────────
     records = []
-    for construct, counts in construct_dur.items():
+    for construct, counts in construct_cb.items():
         if counts["n_total"] < 10:
             continue
-        durability_pct = round(counts["n_durable"] / counts["n_total"] * 100, 1)
+        avg_cb = round(counts["cb_sum"] / counts["n_total"], 1)
         reach = reach_map.get(construct)
         if reach is None:
             continue
@@ -421,7 +424,7 @@ def load_durability_scatter_data():
             "topic": CONSTRUCT_LABELS.get(construct, construct),
             "tier": TIER_MAP.get(construct, ""),
             "reach": round(reach, 1),
-            "durability_pct": durability_pct,
+            "cb_score": avg_cb,
             "n_items": counts["n_total"],
         })
 
@@ -1155,6 +1158,32 @@ elif view_mode == "MPT View":
         "Topics in the upper-right work across the political spectrum — the strongest message investment."
     )
 
+    st.markdown(f"""
+    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;
+        padding:1rem 1.25rem;margin-bottom:1rem;font-size:0.85rem;color:{TEXT2};line-height:1.6;">
+        <strong style="color:{NAVY};font-size:0.9rem;">How to read this chart</strong><br><br>
+        The <strong>X-axis (Reach)</strong> shows how much of the general population supports a topic,
+        adjusted for demographics using MrP. High reach means the message resonates broadly —
+        across race, age, education, and geography.<br><br>
+        The <strong>Y-axis (Conservative Support)</strong> shows whether self-identified
+        Conservatives and Very Conservatives gave a favorable response to the same questions.
+        A score above 50% means a majority of conservatives are on board.<br><br>
+        <strong style="color:{NAVY};">Why this matters for persuasion:</strong>
+        A topic with high reach but low conservative support is popular in the general public
+        but unlikely to move skeptical or right-leaning audiences — that's <em>Base Enthusiasm</em>,
+        not persuasion. A topic that lands in the upper-right (<em>Cross-Cutting</em>) is both
+        broadly popular <em>and</em> has genuine conservative buy-in — the rarest and most
+        valuable combination for bipartisan messaging.<br><br>
+        <span style="color:{TEXT2};opacity:0.8;">
+        <strong>Note:</strong> This view differs from the Scatter view. Scatter uses your survey's
+        partisan subgroup breakdown (e.g., Republicans who took the survey). MPT View uses
+        ideology self-ID across all CJ surveys and applies MrP population adjustment to the
+        reach axis — making it more demographically precise and less dependent on any single
+        survey's sample composition.
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
     mpt_records = load_mpt_conservative_data()
 
     if not mpt_records:
@@ -1239,17 +1268,12 @@ elif view_mode == "MPT View":
         size="n_conservative",
         size_max=22,
         opacity=0.88,
-        text="topic",
         labels={
             "reach": "MrP Reach %",
             "conservative_support": "Conservative Support %",
             "quadrant": "Quadrant",
         },
         custom_data=["topic", "tier", "n_conservative"],
-    )
-    fig_mpt.update_traces(
-        textposition="top center",
-        textfont=dict(size=9, family="DM Sans", color="#1E3A5F"),
     )
 
     for i, trace in enumerate(fig_mpt.data):
@@ -1312,7 +1336,7 @@ elif view_mode == "MPT View":
         ),
     )
 
-    st.plotly_chart(fig_mpt, use_container_width=True, key="il_mpt_scatter")
+    selected_mpt = st.plotly_chart(fig_mpt, use_container_width=True, on_select="rerun", key="il_mpt_scatter")
 
     # ── Interpretation note ──
     if show_regression and r_sq is not None:
@@ -1324,16 +1348,36 @@ elif view_mode == "MPT View":
             Reach and Conservative Support are <strong>{slope_dir} correlated</strong>
             (R²={r_sq:.2f}).
             Vertical line = 60% reach. Horizontal line = 50% conservative support (majority threshold).
-            Bubble size = number of conservative responses scored.
+            Bubble size = number of conservative responses scored. Click any dot to see topic detail.
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Per-topic detail table ──
+    # ── Detect clicked dot ──
+    selected_mpt_construct = None
+    if selected_mpt and selected_mpt.selection and selected_mpt.selection.points:
+        pt = selected_mpt.selection.points[0]
+        idx = pt.get("point_index")
+        curve = pt.get("curve_number", 0)
+        quads_mpt = sorted(mpt_df["quadrant"].unique())
+        if curve < len(quads_mpt):
+            sub_mpt = mpt_df[mpt_df["quadrant"] == quads_mpt[curve]]
+            if idx is not None and idx < len(sub_mpt):
+                selected_mpt_construct = sub_mpt.iloc[idx]["construct"]
+
+    # ── Per-topic detail (click or dropdown) ──
     st.divider()
     st.markdown("#### Topic Detail")
     topic_opts_mpt = sorted(mpt_df["topic"].tolist())
-    sel_mpt = st.selectbox("Topic", ["(select a topic)"] + topic_opts_mpt, key="il_mpt_topic")
-    if sel_mpt != "(select a topic)":
+    construct_to_topic_mpt = dict(zip(mpt_df["construct"], mpt_df["topic"]))
+    preselect_mpt = construct_to_topic_mpt.get(selected_mpt_construct, "(click a dot above)")
+    sel_mpt = st.selectbox(
+        "Or select a topic:",
+        ["(click a dot above)"] + topic_opts_mpt,
+        index=(["(click a dot above)"] + topic_opts_mpt).index(preselect_mpt)
+              if preselect_mpt in topic_opts_mpt else 0,
+        key="il_mpt_topic",
+    )
+    if sel_mpt != "(click a dot above)":
         sel_row = mpt_df[mpt_df["topic"] == sel_mpt].iloc[0]
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Reach",                 f"{sel_row['reach']:.1f}%")
@@ -1347,17 +1391,39 @@ elif view_mode == "MPT View":
 # ══════════════════════════════════════════════════════════════════
 
 elif view_mode == "Durability View":
-    st.markdown("## Durability Scatter — Reach × Message Durability")
+    st.markdown("## Durability Scatter — Reach × Cross-Partisan Score")
     st.caption(
         "**Reach** = MrP-adjusted overall support across all surveyed states. "
-        "**Durability %** = share of scored responses classified as Golden Zone or Primary Fuel. "
-        "Topics in the upper-right are broadly popular AND hold up under pressure — the most resilient message investments."
+        "**Cross-Partisan Score** = average support among Independent, persuadable, and cross-party voters. "
+        "Topics in the upper-right are broadly popular AND hold up with skeptical audiences — the most resilient investments."
     )
+
+    st.markdown(f"""
+    <div style="background:{CARD_BG};border:1px solid {BORDER2};border-radius:8px;
+        padding:1rem 1.25rem;margin-bottom:1rem;font-size:0.85rem;color:{TEXT2};line-height:1.6;">
+        <strong style="color:{NAVY};font-size:0.9rem;">How to read this chart</strong><br><br>
+        The <strong>X-axis (Reach)</strong> shows MrP-adjusted overall support — how the topic lands
+        across the full population, corrected for demographics.<br><br>
+        The <strong>Y-axis (Cross-Partisan Score)</strong> is a composite of support among
+        Independent voters, persuadable voters (Moderates, slight partisans, No Party), and
+        cross-party supporters. It answers the question: <em>does this message hold up when you
+        take it out of your base?</em><br><br>
+        <strong style="color:{NAVY};">Why these can diverge:</strong>
+        A topic can have 70%+ overall support (high Reach) while scoring 45% cross-partisan —
+        meaning it's driven almost entirely by one partisan group and will fall flat with skeptical
+        audiences. That's <em>Fragile Popularity</em>. The <em>Resilient Consensus</em> quadrant
+        (upper-right) is where you find messages safe to deploy in mixed or hostile environments.<br><br>
+        <span style="color:{TEXT2};opacity:0.8;">
+        Bubble size = number of scored responses. Both thresholds fixed at 60%.
+        Click any dot to see topic detail.
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
 
     dur_records = load_durability_scatter_data()
 
     if not dur_records:
-        st.warning("Durability data unavailable. Ensure durability_quadrant is populated in l2_responses for CJ surveys.")
+        st.warning("Durability data unavailable. Ensure cb_score is populated in l2_responses for CJ surveys.")
         st.stop()
 
     dur_df = pd.DataFrame(dur_records)
@@ -1371,31 +1437,31 @@ elif view_mode == "Durability View":
 
     # ── KPI row ──
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Topics Plotted",   f"{len(dur_df)}")
-    c2.metric("Avg Reach",        f"{dur_df['reach'].mean():.0f}%")
-    c3.metric("Avg Durability",   f"{dur_df['durability_pct'].mean():.0f}%")
-    c4.metric("Total Responses",  f"{dur_df['n_items'].sum():,}")
+    c1.metric("Topics Plotted",        f"{len(dur_df)}")
+    c2.metric("Avg Reach",             f"{dur_df['reach'].mean():.0f}%")
+    c3.metric("Avg Cross-Partisan",    f"{dur_df['cb_score'].mean():.0f}%")
+    c4.metric("Total Responses",       f"{dur_df['n_items'].sum():,}")
 
-    # ── Thresholds (both data-driven medians) ──
+    # ── Fixed thresholds (both at 60%) ──
     reach_thresh_d = 60.0
-    dur_thresh     = float(dur_df["durability_pct"].median())
+    cb_thresh      = 60.0
 
     DUR_QUAD_COLORS = {
-        "Resilient Consensus": "#1B6B3A",   # High Reach + High Durability
-        "Fragile Popularity":  "#1155AA",   # High Reach + Low Durability
-        "Durable Niche":       "#B85400",   # Low Reach + High Durability
-        "Low Priority":        "#8B1A1A",   # Low Reach + Low Durability
+        "Resilient Consensus":  "#1B6B3A",   # High Reach + High CB
+        "Fragile Popularity":   "#1155AA",   # High Reach + Low CB
+        "Persuasion Lever":     "#B85400",   # Low Reach + High CB
+        "Low Priority":         "#8B1A1A",   # Low Reach + Low CB
     }
 
     def dur_quadrant(row):
-        hi_reach = row["reach"] >= reach_thresh_d
-        hi_dur   = row["durability_pct"] >= dur_thresh
-        if hi_reach and hi_dur:
+        hi_reach = row["reach"]    >= reach_thresh_d
+        hi_cb    = row["cb_score"] >= cb_thresh
+        if hi_reach and hi_cb:
             return "Resilient Consensus"
-        elif hi_reach and not hi_dur:
+        elif hi_reach and not hi_cb:
             return "Fragile Popularity"
-        elif not hi_reach and hi_dur:
-            return "Durable Niche"
+        elif not hi_reach and hi_cb:
+            return "Persuasion Lever"
         else:
             return "Low Priority"
 
@@ -1404,7 +1470,7 @@ elif view_mode == "Durability View":
 
     # ── Regression ──
     x_vals_d = dur_df["reach"].values
-    y_vals_d = dur_df["durability_pct"].values
+    y_vals_d = dur_df["cb_score"].values
     try:
         coef_d    = np.polyfit(x_vals_d, y_vals_d, 1)
         x_reg_d   = np.linspace(x_vals_d.min() - 2, x_vals_d.max() + 2, 100)
@@ -1421,7 +1487,7 @@ elif view_mode == "Durability View":
         hover_texts_d.append(
             f"<b>{row['topic']}</b><br>"
             f"Reach: {row['reach']:.1f}%<br>"
-            f"Durability: {row['durability_pct']:.1f}%<br>"
+            f"Cross-Partisan: {row['cb_score']:.1f}%<br>"
             f"Tier: {row['tier'] or '—'}<br>"
             f"Scored responses: {row['n_items']:,}"
             f"<extra></extra>"
@@ -1429,23 +1495,18 @@ elif view_mode == "Durability View":
 
     fig_dur = px.scatter(
         dur_df,
-        x="reach", y="durability_pct",
+        x="reach", y="cb_score",
         color="quadrant",
         color_discrete_map=DUR_QUAD_COLORS,
         size="n_items",
         size_max=22,
         opacity=0.88,
-        text="topic",
         labels={
-            "reach":         "MrP Reach %",
-            "durability_pct": "Durability %",
-            "quadrant":       "Quadrant",
+            "reach":    "MrP Reach %",
+            "cb_score": "Cross-Partisan Score %",
+            "quadrant": "Quadrant",
         },
         custom_data=["topic", "tier", "n_items"],
-    )
-    fig_dur.update_traces(
-        textposition="top center",
-        textfont=dict(size=9, family="DM Sans", color="#1E3A5F"),
     )
 
     for i, trace in enumerate(fig_dur.data):
@@ -1470,17 +1531,17 @@ elif view_mode == "Durability View":
     yd_min = max(0,   y_vals_d.min() - 5)
     yd_max = min(100, y_vals_d.max() + 5)
 
-    fig_dur.add_hline(y=dur_thresh,      line_dash="dash", line_color="#D4D0C8", line_width=1)
+    fig_dur.add_hline(y=cb_thresh,       line_dash="dash", line_color="#D4D0C8", line_width=1)
     fig_dur.add_vline(x=reach_thresh_d,  line_dash="dash", line_color="#D4D0C8", line_width=1)
 
     lxd = (xd_min + reach_thresh_d) / 2
     rxd = (reach_thresh_d + xd_max) / 2
     tyd = yd_max - 2
     byd = yd_min + 2
-    fig_dur.add_annotation(x=lxd, y=tyd, text="Durable Niche",        showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
-    fig_dur.add_annotation(x=rxd, y=tyd, text="Resilient Consensus",  showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
-    fig_dur.add_annotation(x=lxd, y=byd, text="Low Priority",         showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
-    fig_dur.add_annotation(x=rxd, y=byd, text="Fragile Popularity",   showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
+    fig_dur.add_annotation(x=lxd, y=tyd, text="Persuasion Lever",    showarrow=False, font=dict(color="#B85400", size=10), opacity=0.65)
+    fig_dur.add_annotation(x=rxd, y=tyd, text="Resilient Consensus", showarrow=False, font=dict(color="#1B6B3A", size=12, family="Playfair Display"), opacity=0.85)
+    fig_dur.add_annotation(x=lxd, y=byd, text="Low Priority",        showarrow=False, font=dict(color="#8B1A1A", size=10), opacity=0.65)
+    fig_dur.add_annotation(x=rxd, y=byd, text="Fragile Popularity",  showarrow=False, font=dict(color="#1155AA", size=10), opacity=0.65)
 
     fig_dur.update_layout(
         template="plotly_white",
@@ -1495,18 +1556,18 @@ elif view_mode == "Durability View":
         ),
         yaxis=dict(
             range=[yd_min, yd_max], dtick=10, gridcolor="#E8E4DC",
-            title="Durability % (Golden Zone + Primary Fuel)",
+            title="Cross-Partisan Score % (Independent + persuadable + cross-party)",
             title_font=dict(color=NAVY, size=12),
         ),
         legend=dict(font=dict(size=10, color=NAVY), bgcolor="rgba(250,249,246,0.9)", bordercolor=BORDER2, borderwidth=1),
         font=dict(family="DM Sans", color=NAVY),
         title=dict(
-            text=f"Reach × Message Durability · {len(dur_df)} topics",
+            text=f"Reach × Cross-Partisan Score · {len(dur_df)} topics",
             font=dict(size=13, color=NAVY), x=0.01,
         ),
     )
 
-    st.plotly_chart(fig_dur, use_container_width=True, key="il_dur_scatter")
+    selected_dur = st.plotly_chart(fig_dur, use_container_width=True, on_select="rerun", key="il_dur_scatter")
 
     # ── Interpretation note ──
     if show_reg_d and r_sq_d is not None:
@@ -1515,25 +1576,46 @@ elif view_mode == "Durability View":
         <div style="background:{CARD_BG};border:1px solid {BORDER2};border-left:4px solid {GOLD};
             border-radius:8px;padding:1rem 1.25rem;margin-top:0.5rem;font-size:0.85rem;color:{TEXT2};">
             <strong style="color:{NAVY};">Read:</strong>
-            Reach and Durability are <strong>{slope_dir_d} correlated</strong>
+            Reach and Cross-Partisan Score are <strong>{slope_dir_d} correlated</strong>
             (R²={r_sq_d:.2f}).
-            Vertical line = 60% reach. Horizontal line = median durability ({dur_thresh:.0f}%) across plotted topics.
-            Bubble size = number of scored responses. Durability = % Golden Zone + Primary Fuel.
+            Vertical line = 60% reach. Horizontal line = 60% cross-partisan threshold.
+            Bubble size = number of scored responses.
         </div>
         """, unsafe_allow_html=True)
 
-    # ── Per-topic detail ──
+    # ── Detect clicked dot ──
+    selected_dur_construct = None
+    if selected_dur and selected_dur.selection and selected_dur.selection.points:
+        pt = selected_dur.selection.points[0]
+        idx = pt.get("point_index")
+        curve = pt.get("curve_number", 0)
+        quads_dur = sorted(dur_df["quadrant"].unique())
+        if curve < len(quads_dur):
+            sub_dur = dur_df[dur_df["quadrant"] == quads_dur[curve]]
+            if idx is not None and idx < len(sub_dur):
+                selected_dur_construct = sub_dur.iloc[idx]["construct"]
+
+    # ── Per-topic detail (click or dropdown) ──
     st.divider()
     st.markdown("#### Topic Detail")
     topic_opts_dur = sorted(dur_df["topic"].tolist())
-    sel_dur = st.selectbox("Topic", ["(select a topic)"] + topic_opts_dur, key="il_dur_topic")
-    if sel_dur != "(select a topic)":
+    construct_to_topic_dur = dict(zip(dur_df["construct"], dur_df["topic"]))
+    preselect_dur = construct_to_topic_dur.get(selected_dur_construct, "(click a dot above)")
+    sel_dur = st.selectbox(
+        "Or select a topic:",
+        ["(click a dot above)"] + topic_opts_dur,
+        index=(["(click a dot above)"] + topic_opts_dur).index(preselect_dur)
+               if preselect_dur in topic_opts_dur else 0,
+        key="il_dur_topic",
+    )
+    if sel_dur != "(click a dot above)":
         sel_dur_row = dur_df[dur_df["topic"] == sel_dur].iloc[0]
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Reach",            f"{sel_dur_row['reach']:.1f}%")
-        c2.metric("Durability",       f"{sel_dur_row['durability_pct']:.1f}%")
-        c3.metric("Persuasion Tier",  sel_dur_row["tier"] or "—")
-        c4.metric("Responses Scored", f"{sel_dur_row['n_items']:,}")
+        c1.metric("Reach",              f"{sel_dur_row['reach']:.1f}%")
+        c2.metric("Cross-Partisan",     f"{sel_dur_row['cb_score']:.1f}%")
+        c3.metric("Persuasion Tier",    sel_dur_row["tier"] or "—")
+        c4.metric("Responses Scored",   f"{sel_dur_row['n_items']:,}")
 
 
+render_chat("issue_landscape")
 portal_footer()

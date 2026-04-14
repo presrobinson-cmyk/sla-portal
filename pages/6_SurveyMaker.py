@@ -1383,4 +1383,5 @@ Each additional minute costs roughly 3% completion — quality degrades before a
 </div>
 """, unsafe_allow_html=True)
 
+render_chat("surveymaker")
 portal_footer()
